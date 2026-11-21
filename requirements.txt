@@ -1,0 +1,14 @@
+# Python 依赖（Python 3.10+）
+edge-tts>=6.1.0
+matplotlib>=3.7
+numpy>=1.24
+requests>=2.31
+python-docx>=1.1
+psutil>=5.9
+
+# Web 控制台
+fastapi>=0.110
+uvicorn>=0.27
+
+# B站上传（可选，首次使用需 playwright install chromium）
+playwright>=1.40

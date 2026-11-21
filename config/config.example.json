@@ -1,0 +1,57 @@
+{
+  "_comment": "复制本文件为 config.json 后编辑。article_title / hook_title / date_label / market_mood / ticker 会由 LLM 根据原文自动生成并覆盖。",
+
+  "show_name": "盘面吐槽大会",
+  "episode": "EP.1120",
+  "article_title": "__AUTO__",
+  "hook_title": "__AUTO__",
+  "date_label": "__AUTO__",
+  "market_mood": "__AUTO__",
+  "ticker": "__AUTO__",
+
+  "voice": "zh-CN-YunxiNeural",
+  "rate": "+6%",
+  "gap": 0.18,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+
+  "index_code": "sh000001",
+  "index_name": "上证指数",
+
+  "stocks": [
+    { "code": "sz002156", "name": "通富微电", "file": "stock_tongfu.png", "label": "跌停" },
+    { "code": "sh603324", "name": "盛剑科技", "file": "stock_shengjian.png", "label": "4连板" },
+    { "code": "sh601398", "name": "工商银行", "file": "stock_icbc.png", "label": "尾盘拉升" }
+  ],
+
+  "article": {
+    "base_url": "https://ashare.ldragon.xyz/summary_today/",
+    "pattern": "{date}_summary_today.docx",
+    "retries": 3,
+    "retry_interval": 20
+  },
+
+  "render": {
+    "concurrency": 4,
+    "tab_concurrency": 1,
+    "chunk_frames": 3200,
+    "memory_per_tab_gb": 0.45,
+    "memory_reserve_gb": 0.8
+  },
+
+  "bilibili": {
+    "enabled": false,
+    "cookies_file": "config/bilibili_cookies.json",
+    "headless": true
+  },
+
+  "llm": {
+    "provider": "agnes",
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "model": "agnes-3.0-flash",
+    "api_key": "",
+    "temperature": 0.9,
+    "timeout": 180
+  }
+}

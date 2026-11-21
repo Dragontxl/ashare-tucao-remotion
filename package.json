@@ -1,0 +1,19 @@
+{
+  "name": "ashare-tucao-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A股盘面吐槽大会：当日复盘 docx -> 毒舌文稿 -> 数据图表视频/封面/简介/标签 -> B站 全流程自动化",
+  "scripts": {
+    "compositions": "remotion compositions src/index.ts",
+    "studio": "remotion studio src/index.ts",
+    "render": "python scripts/render_video.py",
+    "pipeline": "python scripts/run_all.py",
+    "web": "python web/server.py"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.545",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.545"
+  }
+}

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A股盘面吐槽大会 · 控制台</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">📉</div>
+      <div>
+        <h1>A股盘面吐槽大会</h1>
+        <p>复盘文档 → 毒舌文稿 → 视频 → B站</p>
+      </div>
+    </div>
+    <div class="top-status">
+      <span id="todayLabel" class="muted"></span>
+      <span id="tradingBadge" class="badge badge-muted">检测中…</span>
+      <button class="btn btn-ghost btn-sm" id="refreshStatusBtn">刷新状态</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-view="create">新建任务</button>
+    <button class="tab" data-view="tasks">任务列表</button>
+    <button class="tab" data-view="settings">设置</button>
+  </nav>
+
+  <main class="container">
+    <!-- 新建任务 -->
+    <section id="view-create" class="view">
+      <div class="grid-2">
+        <div class="card">
+          <h2 class="card-title">任务配置</h2>
+
+          <div class="form-row">
+            <label class="field">
+              <span>交易日</span>
+              <input type="date" id="taskDate" />
+            </label>
+            <label class="field">
+              <span>视频标题（可选）</span>
+              <input type="text" id="taskTitle" placeholder="留空则由大模型生成" />
+            </label>
+          </div>
+
+          <div class="field">
+            <span>文章来源</span>
+            <div class="segmented" id="sourceTabs">
+              <button type="button" class="seg active" data-mode="auto">默认文档</button>
+              <button type="button" class="seg" data-mode="paste">粘贴文本</button>
+              <button type="button" class="seg" data-mode="upload">上传文件</button>
+              <button type="button" class="seg" data-mode="url">自定义URL</button>
+            </div>
+          </div>
+
+          <div class="source-panel" data-panel="auto">
+            <p class="hint">默认抓取交易日当日的复盘文档：</p>
+            <a id="defaultArticleUrl" class="link" target="_blank" rel="noreferrer">—</a>
+          </div>
+
+          <div class="source-panel" data-panel="paste" hidden>
+            <textarea id="articleText" rows="10" placeholder="粘贴复盘原文……"></textarea>
+            <p class="hint"><span id="pasteCount">0</span> 字</p>
+          </div>
+
+          <div class="source-panel" data-panel="upload" hidden>
+            <input type="file" id="articleFile" accept=".docx,.md,.markdown,.txt,.text" />
+            <p class="hint" id="uploadInfo">支持 docx / md / txt，上传后自动提取文本</p>
+          </div>
+
+          <div class="source-panel" data-panel="url" hidden>
+            <input type="url" id="articleUrl" placeholder="https://example.com/summary.docx" />
+          </div>
+
+          <div class="row-between">
+            <button type="button" class="btn btn-ghost btn-sm" id="previewBtn">预览原文</button>
+            <span class="hint" id="previewMeta"></span>
+          </div>
+          <pre class="preview-box" id="previewBox" hidden></pre>
+
+          <h3 class="sub-title">生成选项</h3>
+          <div class="form-row">
+            <label class="field">
+              <span>配音音色</span>
+              <select id="voice">
+                <option value="zh-CN-YunxiNeural">云希 · 男声（默认）</option>
+                <option value="zh-CN-XiaoxiaoNeural">晓晓 · 女声</option>
+                <option value="zh-CN-YunjianNeural">云健 · 男声</option>
+                <option value="zh-CN-XiaoyiNeural">晓伊 · 女声</option>
+                <option value="zh-CN-YunyangNeural">云扬 · 男声</option>
+                <option value="zh-CN-liaoning-XiaobeiNeural">小北 · 东北女声</option>
+                <option value="zh-CN-shaanxi-XiaoniNeural">小妮 · 陕西女声</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>语速</span>
+              <select id="rate">
+                <option value="-10%">慢（-10%）</option>
+                <option value="+0%">正常</option>
+                <option value="+6%" selected>快（+6%）</option>
+                <option value="+10%">更快（+10%）</option>
+                <option value="+15%">极快（+15%）</option>
+              </select>
+            </label>
+            <label class="field field-narrow">
+              <span>渲染并发</span>
+              <input type="number" id="concurrency" value="4" min="1" max="8" />
+            </label>
+          </div>
+          <p class="hint">4 个渲染 tab 并行（单进程，避免 4 个浏览器进程占满内存）；内存不足会自动降为 2 个或 1 个。</p>
+
+          <div class="check-row">
+            <label class="check"><input type="checkbox" id="optUpload" /> 完成后自动上传B站</label>
+            <label class="check"><input type="checkbox" id="optForce" /> 非交易日强制运行</label>
+            <label class="check"><input type="checkbox" id="optSkipLlm" /> 跳过大模型（降级文稿）</label>
+          </div>
+
+          <div class="actions">
+            <button type="button" class="btn btn-primary" id="createBtn">创建并开始</button>
+          </div>
+          <p class="hint" id="createError"></p>
+        </div>
+
+        <div class="card side-card">
+          <h2 class="card-title">流水线</h2>
+          <ol class="pipeline">
+            <li><b>交易日判定</b><span>东方财富财经早餐</span></li>
+            <li><b>获取复盘文档</b><span>默认当日 docx</span></li>
+            <li><b>生成毒舌文稿</b><span>Agnes 3.0 Flash</span></li>
+            <li><b>配音与时间轴</b><span>edge-tts 逐句合成</span></li>
+            <li><b>真实行情与图表</b><span>腾讯财经接口</span></li>
+            <li><b>4 路并发渲染</b><span>Remotion 4 tab + 分块</span></li>
+            <li><b>简介标签</b><span>B站简介与 tag</span></li>
+            <li><b>上传B站</b><span>可选，Playwright</span></li>
+          </ol>
+          <div class="tip">
+            <b>提示</b>
+            <p>非交易日会自动停止，不消耗模型与渲染资源。需要补跑历史数据时，可选择日期并勾选「强制运行」。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 任务列表 -->
+    <section id="view-tasks" class="view" hidden>
+      <div class="row-between page-head">
+        <h2>任务列表</h2>
+        <button class="btn btn-ghost btn-sm" id="refreshTasksBtn">刷新</button>
+      </div>
+      <div id="taskList" class="task-list"></div>
+      <p class="empty" id="taskEmpty">还没有任务，先去「新建任务」吧。</p>
+    </section>
+
+    <!-- 任务详情 -->
+    <section id="view-detail" class="view" hidden>
+      <div class="row-between page-head">
+        <div>
+          <button class="btn btn-ghost btn-sm" id="backBtn">← 返回列表</button>
+          <h2 id="detailTitle">任务详情</h2>
+        </div>
+        <div class="row-gap">
+          <span id="detailStatus" class="badge badge-muted">—</span>
+          <button class="btn btn-ghost btn-sm" id="cancelBtn" hidden>取消任务</button>
+          <button class="btn btn-primary btn-sm" id="uploadBtn" hidden>上传B站</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="progress-wrap">
+          <div class="progress"><div class="progress-bar" id="detailProgress"></div></div>
+          <div class="row-between">
+            <span id="detailStep" class="muted">等待执行</span>
+            <span id="detailProgressText" class="muted"></span>
+          </div>
+        </div>
+        <p class="error-text" id="detailError" hidden></p>
+        <div id="biliResult" class="bili-result" hidden></div>
+      </div>
+
+      <div class="grid-2 detail-grid">
+        <div class="card">
+          <h3 class="sub-title">实时日志</h3>
+          <pre class="log" id="logBox"></pre>
+        </div>
+        <div class="card">
+          <h3 class="sub-title">产物预览</h3>
+          <div id="mediaArea" class="media-area">
+            <p class="hint">任务完成后可在此预览视频与封面。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="view-settings" class="view" hidden>
+      <div class="grid-2">
+        <div class="card">
+          <h2 class="card-title">大模型</h2>
+          <p class="hint">默认 Agnes 3.0 Flash（OpenAI 兼容接口）。Key 也可通过环境变量 <code>AGNES_API_KEY</code> 覆盖。</p>
+          <label class="field">
+            <span>Base URL</span>
+            <input type="text" id="llmBaseUrl" placeholder="https://apihub.agnes-ai.com/v1" />
+          </label>
+          <label class="field">
+            <span>模型</span>
+            <input type="text" id="llmModel" placeholder="agnes-3.0-flash" />
+          </label>
+          <label class="field">
+            <span>API Key <em id="llmKeyState" class="hint"></em></span>
+            <input type="password" id="llmKey" placeholder="留空表示不修改" />
+          </label>
+          <div class="actions">
+            <button class="btn btn-ghost" id="testLlmBtn">测试连接</button>
+            <span class="hint" id="llmTestResult"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">B站 Cookie</h2>
+          <p class="hint">推荐直接扫码登录：会打开一个 Chrome 窗口，用「B站 App → 扫一扫」确认后自动导出 Cookie（含 httpOnly 的 SESSDATA）。也可以手动粘贴。</p>
+          <div class="actions" style="margin-bottom:10px">
+            <button class="btn btn-primary btn-sm" id="biliLoginBtn">扫码登录 B站</button>
+            <button class="btn btn-ghost btn-sm" id="biliCheckBtn">检测 Cookie</button>
+            <span class="hint" id="biliLoginStatus"></span>
+          </div>
+          <textarea id="biliCookies" rows="8" placeholder="SESSDATA=...; bili_jct=...; DedeUserID=..."></textarea>
+          <label class="check" style="margin-top:12px">
+            <input type="checkbox" id="biliHeadless" checked /> 无头模式上传（调试时可取消）
+          </label>
+          <div class="actions">
+            <button class="btn btn-primary" id="saveSettingsBtn">保存设置</button>
+            <span class="hint" id="settingsResult"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
