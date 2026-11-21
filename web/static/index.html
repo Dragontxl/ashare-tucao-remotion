@@ -120,8 +120,10 @@
 
           <div class="actions">
             <button type="button" class="btn btn-primary" id="createBtn">创建并开始</button>
+            <button type="button" class="btn btn-secondary" id="cloudRunBtn">云端运行 (GitHub Actions)</button>
           </div>
           <p class="hint" id="createError"></p>
+          <p class="hint" id="cloudRunStatus"></p>
         </div>
 
         <div class="card side-card">
@@ -234,6 +236,58 @@
             <button class="btn btn-primary" id="saveSettingsBtn">保存设置</button>
             <span class="hint" id="settingsResult"></span>
           </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">GitHub Actions 云端运行</h2>
+          <p class="hint">在 GitHub 上运行完整流水线，产物自动上传到 Cloudflare R2。需要填入 GitHub PAT（需 repo, workflow 权限）。</p>
+          <div class="form-row">
+            <label class="field">
+              <span>仓库 Owner</span>
+              <input type="text" id="ghOwner" placeholder="Dragontxl" />
+            </label>
+            <label class="field">
+              <span>仓库名</span>
+              <input type="text" id="ghRepo" placeholder="ashare-tucao-remotion" />
+            </label>
+          </div>
+          <label class="field">
+            <span>GitHub PAT <em id="ghPatState" class="hint"></em></span>
+            <input type="password" id="ghPat" placeholder="ghp_... 留空表示不修改" />
+          </label>
+          <p class="hint">PAT 需要 <code>repo</code> 和 <code>workflow</code> 权限。</p>
+
+          <h3 class="sub-title">Cloudflare R2 存储桶</h3>
+          <div class="form-row">
+            <label class="field">
+              <span>桶名</span>
+              <input type="text" id="r2Bucket" placeholder="ashare-tucao-remotion-bucket" />
+            </label>
+            <label class="field">
+              <span>Endpoint</span>
+              <input type="text" id="r2Endpoint" placeholder="https://xxx.r2.cloudflarestorage.com" />
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field">
+              <span>Access Key ID</span>
+              <input type="text" id="r2AccessKey" placeholder="32位 Access Key ID" />
+            </label>
+            <label class="field">
+              <span>Secret Access Key</span>
+              <input type="password" id="r2SecretKey" placeholder="Secret Access Key" />
+            </label>
+          </div>
+          <label class="field">
+            <span>公开 URL</span>
+            <input type="text" id="r2PublicUrl" placeholder="https://bucket.xxx.r2.cloudflarestorage.com" />
+          </label>
+          <div class="actions">
+            <button class="btn btn-primary" id="saveGithubBtn">保存云端配置</button>
+            <button class="btn btn-ghost btn-sm" id="r2ListBtn">查看 R2 产物</button>
+            <span class="hint" id="githubResult"></span>
+          </div>
+          <div id="r2FileList" class="r2-list" hidden></div>
         </div>
       </div>
     </section>

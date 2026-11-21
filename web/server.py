@@ -26,6 +26,8 @@ import threading
 import time
 import traceback
 import uuid
+import urllib.error
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -690,6 +692,18 @@ def get_settings():
         },
         "render": cfg.get("render", {}),
         "article": cfg.get("article", {}),
+        "github": {
+            "owner": (cfg.get("github") or {}).get("owner", "Dragontxl"),
+            "repo": (cfg.get("github") or {}).get("repo", "ashare-tucao-remotion"),
+            "pat": (cfg.get("github") or {}).get("pat", ""),
+            "has_pat": bool((cfg.get("github") or {}).get("pat")),
+        },
+        "r2": {
+            "bucket": (cfg.get("r2") or {}).get("bucket", ""),
+            "endpoint": (cfg.get("r2") or {}).get("endpoint", ""),
+            "public_url": (cfg.get("r2") or {}).get("public_url", ""),
+            "configured": bool((cfg.get("r2") or {}).get("bucket") and (cfg.get("r2") or {}).get("access_key_id")),
+        },
     }
 
 
@@ -723,6 +737,19 @@ async def save_settings(request: Request):
                 f.write(cookies + "\n")
         elif os.path.exists(path):
             os.remove(path)
+
+    gh = body.get("github") or {}
+    if gh.get("pat"):
+        cfg.setdefault("github", {})["pat"] = gh["pat"].strip()
+    if gh.get("owner"):
+        cfg.setdefault("github", {})["owner"] = gh["owner"].strip()
+    if gh.get("repo"):
+        cfg.setdefault("github", {})["repo"] = gh["repo"].strip()
+
+    r2 = body.get("r2") or {}
+    for _k in ("bucket", "access_key_id", "secret_access_key", "endpoint", "public_url"):
+        if r2.get(_k):
+            cfg.setdefault("r2", {})[_k] = r2[_k].strip()
 
     save_config(cfg)
     return {"ok": True}
@@ -808,6 +835,207 @@ def bilibili_check():
     ok, message, profile = check_cookies(BILI_COOKIES)
     return JSONResponse(status_code=200 if ok else 400,
                         content={"ok": ok, "message": message, "profile": profile})
+
+
+# ── GitHub Actions 云端运行 ──────────────────────────────────────────────
+
+def _github_config():
+    """读取 GitHub 配置：PAT、仓库 owner、仓库名。
+    
+    优先环境变量，其次 config.json。
+    """
+    pat = os.environ.get("GH_PAT") or os.environ.get("GITHUB_PAT") or ""
+    owner = os.environ.get("GITHUB_REPO_OWNER", "Dragontxl")
+    repo = os.environ.get("GITHUB_REPO_NAME", "ashare-tucao-remotion")
+    cfg = load_config()
+    gh = cfg.get("github") or {}
+    pat = gh.get("pat") or pat
+    owner = gh.get("owner") or owner
+    repo = gh.get("repo") or repo
+    return {"pat": pat, "owner": owner, "repo": repo}
+
+
+def _r2_config():
+    """读取 R2 配置：桶名、Access Key、Secret、Endpoint、公开 URL。"""
+    cfg = load_config()
+    r2 = cfg.get("r2") or {}
+    return {
+        "bucket": r2.get("bucket") or os.environ.get("R2_BUCKET_NAME", ""),
+        "access_key_id": r2.get("access_key_id") or os.environ.get("R2_ACCESS_KEY_ID", ""),
+        "secret_access_key": r2.get("secret_access_key") or os.environ.get("R2_SECRET_ACCESS_KEY", ""),
+        "endpoint": r2.get("endpoint") or os.environ.get("R2_ENDPOINT_URL", ""),
+        "public_url": r2.get("public_url") or os.environ.get("R2_PUBLIC_URL", ""),
+    }
+
+
+@app.get("/api/github/status")
+def github_status():
+    """检查 GitHub Actions 云端运行是否已配置。"""
+    gh = _github_config()
+    r2 = _r2_config()
+    return {
+        "configured": bool(gh["pat"]),
+        "owner": gh["owner"],
+        "repo": gh["repo"],
+        "has_pat": bool(gh["pat"]),
+        "r2_configured": bool(r2["bucket"] and r2["access_key_id"]),
+        "r2_bucket": r2["bucket"],
+    }
+
+
+@app.post("/api/github/dispatch")
+async def github_dispatch(request: Request):
+    """触发 GitHub Actions 云端运行。
+    
+    调用 repository_dispatch 端点：
+      POST https://api.github.com/repos/{owner}/{repo}/dispatches
+      event_type = ashare-tucao-generation
+      client_payload = {date, article, video_title, concurrency, force, upload, skip_llm}
+    """
+    gh = _github_config()
+    if not gh["pat"]:
+        raise HTTPException(400, "未配置 GitHub PAT，请在设置中填写或设置环境变量 GH_PAT")
+
+    body = await request.json()
+    date_val = body.get("date") or ""
+    article = body.get("article") or ""
+    video_title = body.get("video_title") or ""
+    concurrency = str(body.get("concurrency") or "4")
+    force = body.get("force", False)
+    upload = body.get("upload", False)
+    skip_llm = body.get("skip_llm", False)
+
+    # repository_dispatch 的 client_payload 最多 10 个顶层属性，这里刚好 7 个
+    payload = {
+        "event_type": "ashare-tucao-generation",
+        "client_payload": {
+            "date": date_val,
+            "article": article,
+            "video_title": video_title,
+            "concurrency": concurrency,
+            "force": str(force).lower() if isinstance(force, bool) else str(force),
+            "upload": str(upload).lower() if isinstance(upload, bool) else str(upload),
+            "skip_llm": str(skip_llm).lower() if isinstance(skip_llm, bool) else str(skip_llm),
+        },
+    }
+
+    url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/dispatches"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {gh['pat']}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "ashare-tucao-remotion",
+        },
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+        raw = resp.read()
+        result = json.loads(raw) if raw else {}
+        return {"ok": True, "message": "GitHub Actions 已触发", "dispatch_id": result.get("id"),
+                "url": f"https://github.com/{gh['owner']}/{gh['repo']}/actions"}
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:500]
+        raise HTTPException(502, f"GitHub API 调用失败：{e.code} {err_body}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"触发失败：{str(e)}")
+
+
+@app.post("/api/github/save-config")
+async def github_save_config(request: Request):
+    """保存 GitHub 与 R2 配置到 config.json。"""
+    body = await request.json()
+    cfg = load_config()
+    gh = body.get("github") or {}
+    r2 = body.get("r2") or {}
+    if gh.get("pat"):
+        cfg.setdefault("github", {})["pat"] = gh["pat"].strip()
+    if gh.get("owner"):
+        cfg.setdefault("github", {})["owner"] = gh["owner"].strip()
+    if gh.get("repo"):
+        cfg.setdefault("github", {})["repo"] = gh["repo"].strip()
+    for k in ("bucket", "access_key_id", "secret_access_key", "endpoint", "public_url"):
+        if r2.get(k):
+            cfg.setdefault("r2", {})[k] = r2[k].strip()
+    save_config(cfg)
+    return {"ok": True}
+
+
+# ── R2 存储桶代理 ────────────────────────────────────────────────────────
+
+def _r2_client():
+    """创建 R2 S3 客户端。未配置则返回 None。"""
+    r2 = _r2_config()
+    if not r2["bucket"] or not r2["access_key_id"]:
+        return None, r2
+    import boto3
+    from botocore.config import Config
+    client = boto3.client(
+        "s3",
+        endpoint_url=r2["endpoint"].rstrip("/"),
+        aws_access_key_id=r2["access_key_id"],
+        aws_secret_access_key=r2["secret_access_key"],
+        config=Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+            retries={"max_attempts": 3, "mode": "standard"},
+            max_pool_connections=20,
+        ),
+    )
+    return client, r2
+
+
+@app.get("/api/r2/list")
+def r2_list():
+    """列出 R2 桶中的产物（按前缀过滤，返回最新运行记录）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        return {"ok": False, "error": "R2 未配置", "items": []}
+    prefix = "ashare-tucao/"
+    try:
+        resp = client.list_objects_v2(Bucket=r2["bucket"], Prefix=prefix)
+        items = []
+        for obj in resp.get("Contents", []):
+            items.append({
+                "key": obj["Key"],
+                "size": obj["Size"],
+                "last_modified": obj["LastModified"].isoformat(),
+            })
+        items.sort(key=lambda x: x["last_modified"], reverse=True)
+        # 按运行前缀分组
+        runs = {}
+        for it in items:
+            prefix_part = it["key"][len("ashare-tucao/"):].split("/")[0]
+            runs.setdefault(prefix_part, []).append(it)
+        run_list = [{"prefix": k, "files": v, "count": len(v)} for k, v in sorted(runs.items(), reverse=True)]
+        return {"ok": True, "runs": run_list, "public_url": r2["public_url"]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e), "items": []}
+
+
+@app.get("/api/r2/file")
+def r2_file(key: str):
+    """从 R2 下载文件（带 Range 支持，用于视频播放）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        raise HTTPException(400, "R2 未配置")
+    try:
+        import io
+        obj = client.get_object(Bucket=r2["bucket"], Key=key)
+        body = obj["Body"].read()
+        return JSONResponse(
+            content=base64.b64encode(body).decode("ascii"),
+            headers={
+                "Content-Type": obj.get("ContentType", "application/octet-stream"),
+                "X-File-Size": str(len(body)),
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(404, f"文件不存在：{str(e)}")
 
 
 # ── 静态资源 ────────────────────────────────────────────────────────────

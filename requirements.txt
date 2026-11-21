@@ -12,3 +12,6 @@ uvicorn>=0.27
 
 # B站上传（可选，首次使用需 playwright install chromium）
 playwright>=1.40
+
+# Cloudflare R2 存储（云端运行产物上传/下载）
+boto3>=1.34

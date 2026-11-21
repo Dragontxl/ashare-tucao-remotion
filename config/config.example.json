@@ -53,5 +53,21 @@
     "api_key": "",
     "temperature": 0.9,
     "timeout": 180
+  },
+
+  "github": {
+    "_comment": "GitHub Actions 云端运行配置。PAT 需要 repo, workflow 权限。也可用环境变量 GH_PAT 覆盖。",
+    "owner": "Dragontxl",
+    "repo": "ashare-tucao-remotion",
+    "pat": ""
+  },
+
+  "r2": {
+    "_comment": "Cloudflare R2 存储桶配置。用于云端运行产物上传/下载。",
+    "bucket": "ashare-tucao-remotion-bucket",
+    "access_key_id": "",
+    "secret_access_key": "",
+    "endpoint": "https://d30bed2763a23cf8eddf343ca192c5ff.r2.cloudflarestorage.com",
+    "public_url": ""
   }
 }

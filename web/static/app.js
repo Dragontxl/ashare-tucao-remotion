@@ -86,6 +86,7 @@ function showView(name) {
   if (name === 'tasks') { loadTasks(); startListPoll(); }
   else stopListPoll();
   if (name !== 'detail') { stopDetailPoll(); }
+  if (name === 'settings') { loadGithubConfig(); }
 }
 
 function startListPoll() {
@@ -295,6 +296,54 @@ async function createTask() {
   } finally {
     btn.disabled = false;
     btn.textContent = '创建并开始';
+  }
+}
+
+/* ── 云端运行（GitHub Actions）──────────────────────────── */
+
+function collectCloudPayload() {
+  const mode = state.sourceMode;
+  let article = '';
+  if (mode === 'paste') {
+    article = $('#articleText').value.trim();
+  } else if (mode === 'url') {
+    article = $('#articleUrl').value.trim();
+  } else if (mode === 'upload') {
+    // 上传的文件已存本地，云端无法读取；提示用户改用粘贴或 URL
+    article = '';
+  }
+  return {
+    date: inputToDate8($('#taskDate').value),
+    article: article,
+    video_title: $('#taskTitle').value.trim(),
+    concurrency: String($('#concurrency').value || '4'),
+    force: $('#optForce').checked,
+    upload: $('#optUpload').checked,
+    skip_llm: $('#optSkipLlm').checked,
+  };
+}
+
+async function cloudRun() {
+  const btn = $('#cloudRunBtn');
+  const statusEl = $('#cloudRunStatus');
+  btn.disabled = true;
+  btn.textContent = '触发中…';
+  statusEl.textContent = '';
+  try {
+    // 上传模式下提醒用户
+    if (state.sourceMode === 'upload' && state.articlePath) {
+      statusEl.textContent = '⚠️ 上传的文件仅存本地，云端无法读取。请改用「粘贴文本」或「自定义URL」，或留空让云端抓取当日文档。';
+    }
+    const payload = collectCloudPayload();
+    const r = await api('/api/github/dispatch', { method: 'POST', body: JSON.stringify(payload) });
+    statusEl.textContent = `✅ ${r.message}，前往 ${r.url} 查看运行状态。`;
+    toast('GitHub Actions 已触发');
+  } catch (err) {
+    statusEl.textContent = `❌ ${err.message}`;
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '云端运行 (GitHub Actions)';
   }
 }
 
@@ -546,6 +595,107 @@ async function testLlm() {
   }
 }
 
+/* ── GitHub Actions 与 R2 配置 ─────────────────────────── */
+
+async function loadGithubConfig() {
+  try {
+    const s = await api('/api/settings');
+    const gh = s.github || {};
+    const r2 = s.r2 || {};
+    $('#ghOwner').value = gh.owner || '';
+    $('#ghRepo').value = gh.repo || '';
+    $('#ghPat').value = '';
+    $('#ghPatState').textContent = gh.has_pat ? '（已配置）' : '（未配置）';
+    $('#r2Bucket').value = r2.bucket || '';
+    $('#r2Endpoint').value = r2.endpoint || '';
+    $('#r2AccessKey').value = '';
+    $('#r2SecretKey').value = '';
+    $('#r2PublicUrl').value = r2.public_url || '';
+  } catch (e) { toast(e.message, true); }
+}
+
+async function saveGithubConfig() {
+  const btn = $('#saveGithubBtn');
+  btn.disabled = true;
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        github: {
+          owner: $('#ghOwner').value.trim(),
+          repo: $('#ghRepo').value.trim(),
+          pat: $('#ghPat').value.trim(),
+        },
+        r2: {
+          bucket: $('#r2Bucket').value.trim(),
+          endpoint: $('#r2Endpoint').value.trim(),
+          access_key_id: $('#r2AccessKey').value.trim(),
+          secret_access_key: $('#r2SecretKey').value.trim(),
+          public_url: $('#r2PublicUrl').value.trim(),
+        },
+      }),
+    });
+    $('#githubResult').textContent = '✅ 云端配置已保存';
+    toast('云端配置已保存');
+    await loadGithubConfig();
+  } catch (e) {
+    $('#githubResult').textContent = `❌ ${e.message}`;
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function listR2Files() {
+  const btn = $('#r2ListBtn');
+  const listEl = $('#r2FileList');
+  btn.disabled = true;
+  btn.textContent = '加载中…';
+  listEl.hidden = true;
+  try {
+    const r = await api('/api/r2/list');
+    if (!r.ok) {
+      listEl.innerHTML = `<p class="error-text">${escapeHtml(r.error || 'R2 未配置')}</p>`;
+      listEl.hidden = false;
+      return;
+    }
+    if (!r.runs || r.runs.length === 0) {
+      listEl.innerHTML = '<p class="hint">暂无云端运行产物。触发一次云端运行后，产物会自动上传到这里。</p>';
+      listEl.hidden = false;
+      return;
+    }
+    const parts = ['<div class="r2-runs">'];
+    for (const run of r.runs) {
+      parts.push(`<div class="r2-run">`);
+      parts.push(`<div class="r2-run-head"><b>运行 ${escapeHtml(run.prefix)}</b><span class="hint">${run.count} 个文件</span></div>`);
+      parts.push('<ul class="r2-files">');
+      for (const f of run.files) {
+        const size = f.size > 1024 * 1024 ? `${(f.size / 1024 / 1024).toFixed(1)} MB` : `${(f.size / 1024).toFixed(1)} KB`;
+        const fileUrl = `/api/r2/file?key=${encodeURIComponent(f.key)}`;
+        const isVideo = f.key.endsWith('.mp4');
+        const isImg = f.key.endsWith('.png') || f.key.endsWith('.jpg');
+        let action = `<a class="btn btn-ghost btn-sm" href="${fileUrl}" download>下载</a>`;
+        if (isVideo) {
+          action += ` <a class="btn btn-primary btn-sm" href="${fileUrl}" target="_blank" rel="noreferrer">播放</a>`;
+        } else if (isImg) {
+          action += ` <a class="btn btn-primary btn-sm" href="${fileUrl}" target="_blank" rel="noreferrer">预览</a>`;
+        }
+        parts.push(`<li><span class="r2-filename">${escapeHtml(f.key)}</span><span class="r2-size">${size}</span>${action}</li>`);
+      }
+      parts.push('</ul></div>');
+    }
+    parts.push('</div>');
+    listEl.innerHTML = parts.join('');
+    listEl.hidden = false;
+  } catch (e) {
+    listEl.innerHTML = `<p class="error-text">${escapeHtml(e.message)}</p>`;
+    listEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '查看 R2 产物';
+  }
+}
+
 /* ── B站 扫码登录 ───────────────────────────────────────── */
 
 let biliPollTimer = null;
@@ -631,6 +781,9 @@ async function init() {
   $('#testLlmBtn').addEventListener('click', testLlm);
   $('#biliLoginBtn').addEventListener('click', biliLogin);
   $('#biliCheckBtn').addEventListener('click', biliCheck);
+  $('#cloudRunBtn').addEventListener('click', cloudRun);
+  $('#saveGithubBtn').addEventListener('click', saveGithubConfig);
+  $('#r2ListBtn').addEventListener('click', listR2Files);
 
   await loadHealth();
   setupCreate();
