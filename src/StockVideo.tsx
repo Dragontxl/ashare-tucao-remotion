@@ -326,6 +326,7 @@ export const StockVideo: React.FC = () => {
       {chart ? <ChartScene item={current} chart={chart} /> : (
         <>
           {current.visual === "data" && <DataScene item={current} />}
+          {current.visual === "text" && <DataScene item={current} />}
           {current.visual === "punch" && <PunchScene item={current} />}
           {current.visual === "topic" && <TopicScene item={current} />}
           {current.visual === "lesson" && <LessonScene item={current} />}
