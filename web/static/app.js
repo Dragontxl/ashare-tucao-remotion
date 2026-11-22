@@ -13,9 +13,11 @@ const state = {
   sourceMode: 'auto',
   articlePath: null,
   articleChars: 0,
+  uploadedText: '',
   logTimer: null,
   listTimer: null,
   detailTimer: null,
+  cloudRunTimer: null,
   view: 'create',
 };
 
@@ -159,17 +161,14 @@ function applyCloudMode() {
   const previewBtn = $('#previewBtn');
   if (previewBtn) previewBtn.hidden = cloud;
 
-  // 隐藏「上传文件」来源（云端无法读取本地文件）
-  const uploadSeg = $$('#sourceTabs .seg').find((b) => b.dataset.mode === 'upload');
-  if (uploadSeg) uploadSeg.hidden = cloud;
-  const uploadPanel = $$('.source-panel').find((p) => p.dataset.panel === 'upload');
-  if (uploadPanel) uploadPanel.hidden = cloud;
+  // 云端模式保留「上传文件」选项：浏览器端读取文本，随 dispatch 传至 GitHub
 
-  // 云端模式下默认使用「默认文档」来源
-  if (cloud && state.sourceMode === 'upload') {
-    state.sourceMode = 'auto';
-    $$('#sourceTabs .seg').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'auto'));
-    $$('.source-panel').forEach((p) => { p.hidden = p.dataset.panel !== 'auto'; });
+  // 云端模式下更新上传提示文案
+  const uploadInfo = $('#uploadInfo');
+  if (uploadInfo) {
+    uploadInfo.textContent = cloud
+      ? '支持 .md / .txt，浏览器端读取文本后随云端运行一起提交（docx 请改用粘贴或URL）'
+      : '支持 docx / md / txt，上传后自动提取文本';
   }
 
   // 设置页：B站 Cookie 卡片整体隐藏（云端由 wrangler 管理）
@@ -271,6 +270,32 @@ function setupCreate() {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const info = $('#uploadInfo');
+
+    if (state.cloudMode) {
+      // 云端模式：浏览器端读取文件文本，随 dispatch 传至 GitHub
+      info.textContent = `正在读取 ${file.name} …`;
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (ext === 'docx') {
+        info.textContent = '⚠️ docx 为二进制格式，浏览器无法直接解析。请改用 .md 或 .txt，或使用「粘贴文本」「自定义URL」。';
+        state.uploadedText = '';
+        state.articlePath = null;
+        return;
+      }
+      try {
+        const text = await fileToText(file);
+        state.uploadedText = text;
+        state.articlePath = null;
+        const preview = text.slice(0, 1200);
+        showPreview(preview, `来源：${file.name} · ${text.trim().length} 字（浏览器端读取）`);
+        info.textContent = `已读取：${file.name}（${text.trim().length} 字）`;
+        toast('文件内容已读取，将随云端运行一起提交');
+      } catch (err) {
+        info.textContent = `读取失败：${err.message}`;
+        toast(err.message, true);
+      }
+      return;
+    }
+
     info.textContent = `正在上传 ${file.name} …`;
     try {
       const base64 = await fileToBase64(file);
@@ -323,6 +348,15 @@ function fileToBase64(file) {
     };
     reader.onerror = () => reject(new Error('文件读取失败'));
     reader.readAsDataURL(file);
+  });
+}
+
+function fileToText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('文件读取失败'));
+    reader.readAsText(file, 'utf-8');
   });
 }
 
@@ -388,8 +422,8 @@ function collectCloudPayload() {
   } else if (mode === 'url') {
     article = $('#articleUrl').value.trim();
   } else if (mode === 'upload') {
-    // 上传的文件已存本地，云端无法读取；提示用户改用粘贴或 URL
-    article = '';
+    // 云端模式：浏览器端读取的文本直接传入
+    article = state.uploadedText || '';
   }
   return {
     date: inputToDate8($('#taskDate').value),
@@ -408,15 +442,19 @@ async function cloudRun() {
   btn.disabled = true;
   btn.textContent = '触发中…';
   statusEl.textContent = '';
+  $('#cloudRunProgress').innerHTML = '';
+  $('#cloudRunProgress').hidden = true;
   try {
     // 上传模式下提醒用户
-    if (state.sourceMode === 'upload' && state.articlePath) {
-      statusEl.textContent = '⚠️ 上传的文件仅存本地，云端无法读取。请改用「粘贴文本」或「自定义URL」，或留空让云端抓取当日文档。';
+    if (state.sourceMode === 'upload' && !state.uploadedText) {
+      statusEl.textContent = '⚠️ 请先选择要上传的文章文件（支持 .md / .txt）。';
     }
     const payload = collectCloudPayload();
     const r = await api('/api/github/dispatch', { method: 'POST', body: JSON.stringify(payload) });
-    statusEl.textContent = `✅ ${r.message}，前往 ${r.url} 查看运行状态。`;
+    statusEl.textContent = `✅ ${r.message}，正在查询运行状态……`;
     toast('GitHub Actions 已触发');
+    // 开始轮询运行进度
+    startCloudRunPoll();
   } catch (err) {
     statusEl.textContent = `❌ ${err.message}`;
     toast(err.message, true);
@@ -424,6 +462,77 @@ async function cloudRun() {
     btn.disabled = false;
     btn.textContent = '云端运行 (GitHub Actions)';
   }
+}
+
+function startCloudRunPoll() {
+  stopCloudRunPoll();
+  state.cloudRunTimer = setInterval(async () => {
+    await refreshCloudRunProgress();
+  }, 5000);
+}
+
+function stopCloudRunPoll() {
+  if (state.cloudRunTimer) {
+    clearInterval(state.cloudRunTimer);
+    state.cloudRunTimer = null;
+  }
+}
+
+async function refreshCloudRunProgress() {
+  try {
+    const r = await api('/api/github/run');
+    if (!r.ok || !r.run) {
+      if (state.cloudRunTimer) stopCloudRunPoll();
+      return;
+    }
+    renderCloudRunProgress(r.run);
+    const finished = ['completed'].includes(r.run.status);
+    if (finished) {
+      stopCloudRunPoll();
+      if (r.run.conclusion === 'success') {
+        $('#cloudRunStatus').textContent = '✅ 云端运行完成，产物已上传到 R2。可在下方查看或前往 R2 产物页查看。';
+        toast('云端运行完成');
+      } else {
+        $('#cloudRunStatus').textContent = `❌ 云端运行结束（${r.run.conclusion}），请查看 GitHub 日志。`;
+        toast(`云端运行${r.run.conclusion}`, true);
+      }
+    } else {
+      $('#cloudRunStatus').textContent = `⏳ 运行中：${r.run.status}，正在执行步骤…`;
+    }
+  } catch (e) {
+    // 静默失败，继续轮询
+  }
+}
+
+function renderCloudRunProgress(run) {
+  const box = $('#cloudRunProgress');
+  box.hidden = false;
+
+  const stepIcons = {
+    completed: '✅',
+    in_progress: '⏳',
+    queued: '🔲',
+    waiting: '⏳',
+  };
+
+  const parts = [];
+  parts.push(`<div class="cloud-run-head">
+    <b>${escapeHtml(run.name || 'GitHub Actions')}</b>
+    <span class="badge ${run.conclusion === 'success' ? 'badge-ok' : run.conclusion === 'failure' ? 'badge-err' : 'badge-run'}">${escapeHtml(run.status)}${run.conclusion ? ' · ' + run.conclusion : ''}</span>
+    <a class="link" href="${escapeHtml(run.html_url)}" target="_blank" rel="noreferrer">查看日志 →</a>
+  </div>`);
+
+  if (run.steps && run.steps.length > 0) {
+    parts.push('<div class="cloud-steps">');
+    for (const step of run.steps) {
+      const icon = stepIcons[step.status] || '·';
+      const cls = step.status === 'completed' ? 'done' : step.status === 'in_progress' ? 'active' : '';
+      parts.push(`<div class="cloud-step ${cls}"><span>${icon}</span> <span>${escapeHtml(step.name)}</span></div>`);
+    }
+    parts.push('</div>');
+  }
+
+  box.innerHTML = parts.join('');
 }
 
 /* ── 任务列表 ───────────────────────────────────────────── */

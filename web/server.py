@@ -945,6 +945,66 @@ async def github_dispatch(request: Request):
         raise HTTPException(500, f"触发失败：{str(e)}")
 
 
+@app.get("/api/github/run")
+def github_run():
+    """查询最近一次 GitHub Actions 运行状态（含步骤进度）。"""
+    gh = _github_config()
+    if not gh["pat"]:
+        raise HTTPException(400, "未配置 GitHub PAT")
+
+    headers = {
+        "Authorization": f"Bearer {gh['pat']}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "ashare-tucao-remotion",
+    }
+
+    # 获取最近一次运行
+    runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs?per_page=1"
+    try:
+        req = urllib.request.Request(runs_url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read())
+        runs = data.get("workflow_runs", [])
+        if not runs:
+            return {"ok": True, "run": None, "message": "暂无运行记录"}
+
+        run = runs[0]
+        run_info = {
+            "id": run["id"],
+            "name": run.get("name", ""),
+            "event": run.get("event", ""),
+            "status": run.get("status", ""),
+            "conclusion": run.get("conclusion"),
+            "html_url": run.get("html_url", ""),
+            "created_at": run.get("created_at", ""),
+            "updated_at": run.get("updated_at", ""),
+            "steps": [],
+        }
+
+        # 获取步骤详情
+        jobs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs/{run['id']}/jobs"
+        try:
+            req2 = urllib.request.Request(jobs_url, headers=headers)
+            resp2 = urllib.request.urlopen(req2, timeout=15)
+            jobs_data = json.loads(resp2.read())
+            for job in jobs_data.get("jobs", []):
+                for step in job.get("steps", []):
+                    run_info["steps"].append({
+                        "name": step.get("name", ""),
+                        "status": step.get("status", ""),
+                        "conclusion": step.get("conclusion"),
+                    })
+        except Exception:
+            pass  # 步骤获取失败不影响整体返回
+
+        return {"ok": True, "run": run_info}
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"GitHub API 失败：{e.code}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"查询失败：{str(e)}")
+
+
 @app.post("/api/github/save-config")
 async def github_save_config(request: Request):
     """保存 GitHub 与 R2 配置到 config.json。"""

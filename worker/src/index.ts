@@ -211,6 +211,71 @@ app.get('/api/github/status', (c) => {
   });
 });
 
+/** 查询最近一次 GitHub Actions 运行状态（含步骤进度） */
+app.get('/api/github/run', async (c) => {
+  const pat = c.env.GITHUB_PAT;
+  if (!pat) {
+    return c.json({ ok: false, error: '未配置 GitHub PAT' }, 400);
+  }
+
+  const owner = c.env.GITHUB_REPO_OWNER;
+  const repo = c.env.GITHUB_REPO_NAME;
+  const headers = {
+    Authorization: `Bearer ${pat}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'ashare-tucao-remotion-worker',
+  };
+
+  try {
+    // 获取最近一次运行
+    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=1`;
+    const resp = await fetch(runsUrl, { headers });
+    if (!resp.ok) {
+      return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
+    }
+    const data = await resp.json();
+    const runs = data?.workflow_runs || [];
+    if (runs.length === 0) {
+      return c.json({ ok: true, run: null, message: '暂无运行记录' });
+    }
+
+    const run = runs[0];
+    const runInfo = {
+      id: run.id,
+      name: run.name,
+      event: run.event,
+      status: run.status,
+      conclusion: run.conclusion,
+      html_url: run.html_url,
+      created_at: run.created_at,
+      updated_at: run.updated_at,
+      steps: [] as any[],
+    };
+
+    // 获取步骤详情
+    const jobsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`;
+    const jobsResp = await fetch(jobsUrl, { headers });
+    if (jobsResp.ok) {
+      const jobsData = await jobsResp.json();
+      const jobs = jobsData?.jobs || [];
+      for (const job of jobs) {
+        for (const step of job.steps || []) {
+          runInfo.steps.push({
+            name: step.name,
+            status: step.status,
+            conclusion: step.conclusion,
+          });
+        }
+      }
+    }
+
+    return c.json({ ok: true, run: runInfo });
+  } catch (e: any) {
+    return c.json({ ok: false, error: `查询失败：${e?.message || e}` }, 500);
+  }
+});
+
 app.post('/api/github/dispatch', async (c) => {
   const pat = c.env.GITHUB_PAT;
   if (!pat) {

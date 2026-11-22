@@ -150,8 +150,19 @@ def main():
     if fetch_needed:
         from fetch_article import fetch_article
         print("[STEP] 0/6 获取复盘原文", flush=True)
-        article_path, origin = fetch_article(args.article, date8_str, cfg)
-        log(f"原文来源：{origin}")
+        try:
+            article_path, origin = fetch_article(args.article, date8_str, cfg)
+            log(f"原文来源：{origin}")
+        except Exception as e:
+            if args.force:
+                print(f"[ERROR] 原文获取失败：{e}", flush=True)
+                print("[ERROR] 非交易日强制运行时，当日默认复盘文档可能不存在。", flush=True)
+                print("[ERROR] 请使用 --article 指定自定义原文 URL 或本地文件路径。", flush=True)
+                print("[ERROR] 或使用 --no-fetch-article 跳过原文获取（需配合 --skip-llm）。", flush=True)
+                sys.exit(1)
+            else:
+                print(f"[ERROR] 原文获取失败：{e}", flush=True)
+                sys.exit(1)
     env["ARTICLE_PATH"] = article_path
 
     total = len(steps) + (1 if args.upload else 0)

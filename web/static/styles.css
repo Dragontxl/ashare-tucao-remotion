@@ -392,6 +392,39 @@ option { background: var(--bg2); }
 .r2-filename { flex: 1; font-size: 13px; word-break: break-all; }
 .r2-size { font-size: 12px; color: var(--dim); min-width: 80px; text-align: right; }
 
+/* ── 云端运行进度 ───────────────────────────────────────── */
+.cloud-run-progress {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(6, 11, 22, 0.5);
+  border: 1px solid var(--line);
+}
+.cloud-run-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.cloud-run-head b { font-size: 14px; }
+.cloud-run-head .link { margin-left: auto; }
+.cloud-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cloud-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 5px 0;
+}
+.cloud-step.done { color: var(--green); }
+.cloud-step.active { color: var(--amber); font-weight: 600; }
+
 /* ── 响应式 ───────────────────────────────────────────── */
 @media (max-width: 1080px) {
   .grid-2, .detail-grid { grid-template-columns: 1fr; }
