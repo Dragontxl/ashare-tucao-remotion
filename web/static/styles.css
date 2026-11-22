@@ -554,8 +554,11 @@ option { background: var(--bg2); }
 .file-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 14px;
 }
+.file-table th:nth-child(2),
+.file-table td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
 .file-table th {
   text-align: left;
   padding: 10px 12px;
