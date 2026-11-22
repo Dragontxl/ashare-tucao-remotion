@@ -26,16 +26,16 @@ STEP_SCRIPTS = {
     2: "build_audio.py",
     3: "fetch_market_data.py",
     3.5: "make_charts.py",
-    4: "render_video.py",
-    5: "generate_meta.py",
+    5: "generate_meta.py",   # 先生成 cover.json / 简介 / 标签（渲染依赖 cover.json）
+    4: "render_video.py",    # 再渲染视频与封面
 }
 STEP_NAMES = {
     1: "生成毒舌文稿",
     2: "配音与时间轴",
     3: "抓取真实行情",
     3.5: "生成图表",
-    4: "并发渲染视频/封面",
     5: "生成简介与标签",
+    4: "并发渲染视频/封面",
 }
 
 

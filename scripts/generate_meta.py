@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Step 4：生成 B站简介、标签 tag、封面配置 cover.json。
+"""Step 5：生成 B站简介、标签 tag、封面配置 cover.json。
 时间轴章节从 timeline.json 自动提取，与视频完全对齐。
+注意：本步骤在渲染（Step 4）之前执行，确保 cover.json 已就绪。
 """
 import os
 import sys

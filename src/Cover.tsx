@@ -1,6 +1,14 @@
 import React from "react";
 import { AbsoluteFill } from "remotion";
-import cover from "./cover.json";
+
+// cover.json 由 generate_meta.py 在渲染前生成；此处兜底防止缺失时 bundle 失败
+let cover: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  cover = require("./cover.json");
+} catch {
+  cover = {};
+}
 
 const FONT = '"Microsoft YaHei", "Noto Sans CJK SC", "PingFang SC", "Heiti SC", sans-serif';
 
