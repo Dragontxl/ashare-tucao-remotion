@@ -5,6 +5,7 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 const state = {
   health: null,
+  cloudMode: false,
   tasks: [],
   taskId: null,
   task: null,
@@ -80,6 +81,11 @@ function toast(msg, isErr = false) {
 /* ── 视图切换 ───────────────────────────────────────────── */
 
 function showView(name) {
+  // 云端模式无本地任务，不允许进入任务列表
+  if (state.cloudMode && name === 'tasks') {
+    toast('云端模式不支持本地任务列表，请使用「新建任务」页的云端运行', true);
+    return;
+  }
   state.view = name;
   $$('.view').forEach((v) => { v.hidden = v.id !== `view-${name}`; });
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
@@ -131,10 +137,83 @@ function setTradingBadge(status, reason) {
   el.title = reason || '';
 }
 
+/* ── 云端模式适配 ───────────────────────────────────────── */
+
+function applyCloudMode() {
+  const cloud = state.cloudMode;
+
+  // 顶部添加云端模式标识
+  const badge = $('#cloudModeBadge');
+  if (badge) {
+    badge.hidden = !cloud;
+  }
+
+  // 隐藏「任务列表」tab（云端无本地任务）
+  const tasksTab = $$('.tab').find((t) => t.dataset.view === 'tasks');
+  if (tasksTab) tasksTab.hidden = cloud;
+
+  // 新建任务页：隐藏本地独有功能
+  const createBtn = $('#createBtn');
+  if (createBtn) createBtn.hidden = cloud;
+
+  const previewBtn = $('#previewBtn');
+  if (previewBtn) previewBtn.hidden = cloud;
+
+  // 隐藏「上传文件」来源（云端无法读取本地文件）
+  const uploadSeg = $$('#sourceTabs .seg').find((b) => b.dataset.mode === 'upload');
+  if (uploadSeg) uploadSeg.hidden = cloud;
+  const uploadPanel = $$('.source-panel').find((p) => p.dataset.panel === 'upload');
+  if (uploadPanel) uploadPanel.hidden = cloud;
+
+  // 云端模式下默认使用「默认文档」来源
+  if (cloud && state.sourceMode === 'upload') {
+    state.sourceMode = 'auto';
+    $$('#sourceTabs .seg').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'auto'));
+    $$('.source-panel').forEach((p) => { p.hidden = p.dataset.panel !== 'auto'; });
+  }
+
+  // 设置页：B站 Cookie 卡片整体隐藏（云端由 wrangler 管理）
+  const biliCard = $('.card-bili');
+  if (biliCard) biliCard.hidden = cloud;
+
+  // 设置页：GitHub/R2 卡片只读，隐藏保存按钮和 PAT 输入
+  const saveGithubBtn = $('#saveGithubBtn');
+  if (saveGithubBtn) saveGithubBtn.hidden = cloud;
+
+  const ghPatInput = $('#ghPat');
+  if (ghPatInput) ghPatInput.disabled = cloud;
+
+  const ghOwnerInput = $('#ghOwner');
+  if (ghOwnerInput) ghOwnerInput.disabled = cloud;
+
+  const ghRepoInput = $('#ghRepo');
+  if (ghRepoInput) ghRepoInput.disabled = cloud;
+
+  const r2Inputs = ['#r2Bucket', '#r2Endpoint', '#r2AccessKey', '#r2SecretKey', '#r2PublicUrl'];
+  r2Inputs.forEach((sel) => {
+    const el = $(sel);
+    if (el) el.disabled = cloud;
+  });
+
+  // LLM 设置页：隐藏 API Key 输入（云端由 wrangler secret 管理）
+  const llmKeyInput = $('#llmKey');
+  if (llmKeyInput) llmKeyInput.disabled = cloud;
+
+  // 保存设置按钮隐藏（云端无法保存）
+  const saveSettingsBtn = $('#saveSettingsBtn');
+  if (saveSettingsBtn) saveSettingsBtn.hidden = cloud;
+
+  // 显示云端模式提示
+  const ghHint = $('#ghCloudHint');
+  if (ghHint) ghHint.hidden = !cloud;
+}
+
 async function loadHealth(force = false) {
   try {
     const h = await api('/api/health');
     state.health = h;
+    state.cloudMode = h.mode === 'cloud';
+    applyCloudMode();
     $('#todayLabel').textContent = `${h.cn_date} · ${h.date8}`;
     setTradingBadge(h.trading_day, h.trading_reason);
     const d = $('#taskDate').value ? inputToDate8($('#taskDate').value) : h.date8;
@@ -546,8 +625,10 @@ async function loadSettings() {
     $('#llmModel').value = s.llm.model || '';
     $('#llmKeyState').textContent = s.llm.has_key ? `（当前：${s.llm.key_masked}）` : '（未配置）';
     $('#llmKey').value = '';
-    $('#biliCookies').value = s.bilibili.cookies || '';
-    $('#biliHeadless').checked = !!s.bilibili.headless;
+    if (!state.cloudMode) {
+      $('#biliCookies').value = s.bilibili.cookies || '';
+      $('#biliHeadless').checked = !!s.bilibili.headless;
+    }
     if (s.render && s.render.concurrency) $('#concurrency').value = s.render.concurrency;
   } catch (e) { toast(e.message, true); }
 }
@@ -719,6 +800,7 @@ function stopBiliPolling() {
 }
 
 async function refreshBiliLoginStatus(silent) {
+  if (state.cloudMode) return; // 云端模式无 B站登录功能
   try {
     const s = await api('/api/bilibili/login/status');
     if (s.running) {
@@ -793,7 +875,9 @@ async function init() {
   $('#defaultArticleUrl').href = articleUrlFor(d);
   await loadSettings();
   await refreshBiliLoginStatus(true);
-  await loadTasks(true);
+  if (!state.cloudMode) {
+    await loadTasks(true);
+  }
   if (state.health && state.health.trading_day !== undefined) {
     setTradingBadge(state.health.trading_day, state.health.trading_reason);
   }

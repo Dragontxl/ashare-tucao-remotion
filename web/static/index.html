@@ -17,6 +17,7 @@
     </div>
     <div class="top-status">
       <span id="todayLabel" class="muted"></span>
+      <span id="cloudModeBadge" class="badge badge-info" hidden>云端模式</span>
       <span id="tradingBadge" class="badge badge-muted">检测中…</span>
       <button class="btn btn-ghost btn-sm" id="refreshStatusBtn">刷新状态</button>
     </div>
@@ -220,7 +221,7 @@
           </div>
         </div>
 
-        <div class="card">
+        <div class="card card-bili">
           <h2 class="card-title">B站 Cookie</h2>
           <p class="hint">推荐直接扫码登录：会打开一个 Chrome 窗口，用「B站 App → 扫一扫」确认后自动导出 Cookie（含 httpOnly 的 SESSDATA）。也可以手动粘贴。</p>
           <div class="actions" style="margin-bottom:10px">
@@ -241,6 +242,7 @@
         <div class="card">
           <h2 class="card-title">GitHub Actions 云端运行</h2>
           <p class="hint">在 GitHub 上运行完整流水线，产物自动上传到 Cloudflare R2。需要填入 GitHub PAT（需 repo, workflow 权限）。</p>
+          <p class="hint" id="ghCloudHint" hidden>云端模式下，GitHub 与 R2 配置由 Cloudflare Secrets 管理（wrangler secret put / wrangler vars），此处仅展示状态，不可修改。</p>
           <div class="form-row">
             <label class="field">
               <span>仓库 Owner</span>
