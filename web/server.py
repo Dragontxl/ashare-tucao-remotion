@@ -1114,6 +1114,18 @@ def _r2_client():
     return client, r2
 
 
+def _guess_content_type(key: str) -> str:
+    """按扩展名推断 Content-Type，避免 octet-stream 导致浏览器不播放。"""
+    ext = key.lower().rsplit(".", 1)[-1] if "." in key else ""
+    mapping = {
+        "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime", "m4v": "video/x-m4v",
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif",
+        "md": "text/markdown; charset=utf-8", "txt": "text/plain; charset=utf-8",
+        "json": "application/json; charset=utf-8", "srt": "text/plain; charset=utf-8",
+    }
+    return mapping.get(ext, "application/octet-stream")
+
+
 @app.get("/api/r2/list")
 def r2_list():
     """列出 R2 桶中的产物（按前缀过滤，返回最新运行记录）。"""
@@ -1154,23 +1166,24 @@ def r2_file(key: str, request: Request):
         range_header = request.headers.get("Range")
 
         if range_header:
-            # 解析 Range: bytes=start-end
+            # boto3 的 Range 参数需要完整 HTTP Range 值（如 bytes=0-1023）
             resp = client.get_object(
-                Bucket=r2["bucket"], Key=key,
-                Range=range_header.replace("bytes=", ""),
+                Bucket=r2["bucket"], Key=key, Range=range_header,
             )
             status_code = 206
-            headers["Content-Range"] = resp.get("Content-Range", range_header)
+            headers["Content-Range"] = resp.get("Content-Range", "")
         else:
             resp = client.get_object(Bucket=r2["bucket"], Key=key)
             status_code = 200
 
         body = resp["Body"].read()
-        content_type = resp.get("ContentType", "application/octet-stream")
+        content_type = resp.get("ContentType") or ""
+        if not content_type or content_type == "application/octet-stream":
+            content_type = _guess_content_type(key)
         headers["Content-Type"] = content_type
         headers["Accept-Ranges"] = "bytes"
         headers["Cache-Control"] = "public, max-age=3600"
-        headers["X-File-Size"] = str(len(body))
+        headers["Content-Length"] = str(len(body))
 
         return RawResponse(content=body, status_code=status_code, headers=headers)
     except Exception as e:  # noqa: BLE001

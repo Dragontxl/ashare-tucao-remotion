@@ -568,26 +568,26 @@ function renderCloudRunProgress(run) {
 }
 
 /** 云端运行成功后，加载最新 R2 产物用于预览、下载、上传B站 */
+/** 从 R2 顶层运行目录中挑出与日期匹配的最新目录（无匹配则取最新） */
+async function pickRunPrefix(date8) {
+  const r = await api('/api/r2/files?prefix=ashare-tucao/');
+  if (!r.ok) throw new Error(r.error || 'R2 列表读取失败');
+  // 顶部列表带 Delimiter，运行目录在 folders 里而非 files
+  const folders = (r.folders || [])
+    .map((f) => String(f.key || '').replace(/\/+$/, ''))
+    .filter((k) => k.startsWith('ashare-tucao/'));
+  if (folders.length === 0) return null;
+  const matching = date8 ? folders.filter((p) => p.startsWith(`ashare-tucao/${date8}_`)) : [];
+  return (matching.sort().reverse()[0]) || folders.sort().reverse()[0];
+}
+
 async function loadCloudResult() {
   try {
-    const r = await api('/api/r2/files?prefix=ashare-tucao/');
-    if (!r.ok || !r.files || r.files.length === 0) {
+    const latestPrefix = await pickRunPrefix('');
+    if (!latestPrefix) {
       $('#cloudResultArea').hidden = true;
       return;
     }
-    // 找到最新的运行目录（按文件名排序，取最大前缀）
-    const runPrefixes = new Set();
-    for (const f of r.files) {
-      const parts = f.key.split('/');
-      if (parts.length >= 2 && parts[0] === 'ashare-tucao') {
-        runPrefixes.add(parts.slice(0, 2).join('/'));
-      }
-    }
-    if (runPrefixes.size === 0) {
-      $('#cloudResultArea').hidden = true;
-      return;
-    }
-    const latestPrefix = Array.from(runPrefixes).sort().reverse()[0];
     // 获取该前缀下的所有文件
     const detail = await api(`/api/r2/files?prefix=${encodeURIComponent(latestPrefix + '/')}`);
     if (!detail.ok || !detail.files) {
@@ -597,8 +597,6 @@ async function loadCloudResult() {
     const files = detail.files;
     const videoFile = files.find((f) => f.key.endsWith('video_final.mp4'));
     const coverFile = files.find((f) => f.key.endsWith('cover.png'));
-    const descFile = files.find((f) => f.key.endsWith('B站简介.md'));
-    const tagsFile = files.find((f) => f.key.endsWith('tags.txt'));
 
     const box = $('#cloudResultArea');
     box.hidden = false;
@@ -926,7 +924,7 @@ function openCloudDetail(runId) {
   state.cloudDetail = true;
   state.task = null;
   state.logOffset = 0;
-  $('#logBox').textContent = '';
+  $('#logBox').textContent = '云端运行的完整日志请在 GitHub Actions 查看（点击右上角「查看日志 ↗」）。';
   $('#mediaArea').innerHTML = '<p class="hint">运行完成后可在此预览视频与封面。</p>';
   delete $('#mediaArea').dataset.rendered;
   $('#detailError').hidden = true;
@@ -953,31 +951,26 @@ function renderCloudDetail(run) {
   const stepsBox = $('#cloudSteps');
   const steps = run.steps || [];
   if (steps.length > 0) {
-    const doneCount = steps.filter((s) => s.status === 'completed').length;
-    const totalCount = steps.length;
-    const pct = Math.round((doneCount / totalCount) * 100);
+    // 跳过的步骤不计入进度分母
+    const runnable = steps.filter((s) => s.conclusion !== 'skipped');
+    const totalCount = runnable.length || steps.length;
+    const doneCount = runnable.filter((s) => s.status === 'completed' && s.conclusion !== 'skipped').length;
+    const pct = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
     $('#detailProgress').style.width = `${pct}%`;
     $('#detailStep').textContent = `${doneCount}/${totalCount} 步骤完成`;
     $('#detailProgressText').textContent = `${doneCount}/${totalCount} · ${pct}%`;
 
-    const stepIcons = {
-      completed: '✓',
-      in_progress: '●',
-      queued: '○',
-      waiting: '○',
-      not_started: '○',
-    };
-    const stepClass = {
-      completed: 'step-done',
-      in_progress: 'step-active',
-      queued: 'step-pending',
-      waiting: 'step-pending',
-      not_started: 'step-pending',
+    const stepDisplay = (step) => {
+      if (step.conclusion === 'skipped') return { icon: '–', cls: 'step-skipped' };
+      if (step.conclusion === 'failure' || step.conclusion === 'timed_out') return { icon: '✗', cls: 'step-fail' };
+      if (step.conclusion === 'cancelled') return { icon: '⊘', cls: 'step-skipped' };
+      if (step.status === 'completed') return { icon: '✓', cls: 'step-done' };
+      if (step.status === 'in_progress') return { icon: '●', cls: 'step-active' };
+      return { icon: '○', cls: 'step-pending' };
     };
     const parts = [];
     for (const step of steps) {
-      const icon = stepIcons[step.status] || '·';
-      const cls = stepClass[step.status] || '';
+      const { icon, cls } = stepDisplay(step);
       parts.push(`<div class="cloud-step ${cls}"><span class="step-icon">${icon}</span> <span class="step-name">${escapeHtml(step.name)}</span></div>`);
     }
     stepsBox.innerHTML = parts.join('');
@@ -1034,33 +1027,11 @@ async function renderCloudMedia(run) {
     // 从 run.created_at 提取日期，匹配 R2 中的运行目录
     const createdAt = run.created_at || '';
     const date8 = createdAt.slice(0, 10).replaceAll('-', ''); // YYYYMMDD
-    if (!date8) {
-      area.innerHTML = '<p class="hint">未找到运行日期，无法定位产物。</p>';
-      return;
-    }
-    // 列出 R2 中所有运行目录
-    const r = await api('/api/r2/files?prefix=ashare-tucao/');
-    if (!r.ok || !r.files || r.files.length === 0) {
+    const latestPrefix = await pickRunPrefix(date8);
+    if (!latestPrefix) {
       area.innerHTML = '<p class="hint">R2 中未找到产物文件。</p>';
       return;
     }
-    const runPrefixes = new Set();
-    for (const f of r.files) {
-      const parts = f.key.split('/');
-      if (parts.length >= 2 && parts[0] === 'ashare-tucao') {
-        runPrefixes.add(parts.slice(0, 2).join('/'));
-      }
-    }
-    if (runPrefixes.size === 0) {
-      area.innerHTML = '<p class="hint">R2 中未找到运行目录。</p>';
-      return;
-    }
-    // 匹配日期对应的运行目录（可能同日多次，取最新）
-    const matching = Array.from(runPrefixes)
-      .filter((p) => p.startsWith(`ashare-tucao/${date8}_`))
-      .sort()
-      .reverse();
-    const latestPrefix = matching[0] || Array.from(runPrefixes).sort().reverse()[0];
 
     const detail = await api(`/api/r2/files?prefix=${encodeURIComponent(latestPrefix + '/')}`);
     if (!detail.ok || !detail.files) {

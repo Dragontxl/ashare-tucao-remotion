@@ -495,6 +495,16 @@ option { background: var(--bg2); }
   color: var(--dim);
   background: rgba(140, 170, 230, 0.1);
 }
+.cloud-step.step-skipped { color: var(--dim); opacity: 0.75; }
+.cloud-step.step-skipped .step-icon {
+  color: var(--dim);
+  background: rgba(140, 170, 230, 0.08);
+}
+.cloud-step.step-fail { color: var(--red, #ff5d6c); }
+.cloud-step.step-fail .step-icon {
+  color: #2b0408;
+  background: var(--red, #ff5d6c);
+}
 .cloud-progress-text {
   margin-top: 10px;
   font-size: 12px;

@@ -441,27 +441,75 @@ app.get('/api/r2/file', async (c) => {
     return c.json({ ok: false, error: '缺少 key 参数' }, 400);
   }
 
-  try {
-    const range = c.req.header('Range');
-    const obj = await c.env.R2.get(key, range ? { range } : undefined);
+  // 按扩展名推断 Content-Type（避免 octet-stream 导致浏览器不播放）
+  const extType = (k: string): string => {
+    const ext = k.toLowerCase().split('.').pop() || '';
+    const map: Record<string, string> = {
+      mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', m4v: 'video/x-m4v',
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+      md: 'text/markdown; charset=utf-8', txt: 'text/plain; charset=utf-8',
+      json: 'application/json; charset=utf-8', srt: 'text/plain; charset=utf-8',
+    };
+    return map[ext] || 'application/octet-stream';
+  };
 
-    if (!obj) {
+  try {
+    const head = await c.env.R2.head(key);
+    if (!head) {
       return c.json({ ok: false, error: `文件不存在：${key}` }, 404);
     }
+    const size = head.size;
+    const metaType = head.httpMetadata?.contentType;
+    const contentType = (!metaType || metaType === 'application/octet-stream') ? extType(key) : metaType;
 
-    const headers: Record<string, string> = {
-      'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
+    const baseHeaders: Record<string, string> = {
+      'Content-Type': contentType,
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'public, max-age=3600',
     };
-    if (obj.size != null) {
-      headers['X-File-Size'] = String(obj.size);
-    }
-    if (range) {
-      headers['Content-Range'] = range;
+
+    // 解析 Range: bytes=start-end / bytes=start- / bytes=-suffix
+    const rangeHeader = c.req.header('Range');
+    if (rangeHeader) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+      if (m) {
+        const hasStart = m[1] !== '';
+        const hasEnd = m[2] !== '';
+        let offset = 0;
+        let length = size;
+        if (hasStart) {
+          offset = parseInt(m[1], 10);
+          if (hasEnd) length = parseInt(m[2], 10) - offset + 1;
+          else length = size - offset;
+        } else if (hasEnd) {
+          const suffix = parseInt(m[2], 10);
+          offset = Math.max(0, size - suffix);
+          length = size - offset;
+        }
+        if (offset >= 0 && offset < size) {
+          length = Math.max(1, Math.min(length, size - offset));
+          const obj = await c.env.R2.get(key, { range: { offset, length } });
+          if (!obj) {
+            return c.json({ ok: false, error: `文件不存在：${key}` }, 404);
+          }
+          const headers: Record<string, string> = {
+            ...baseHeaders,
+            'Content-Range': `bytes ${offset}-${offset + length - 1}/${size}`,
+            'Content-Length': String(length),
+          };
+          return new Response(obj.body, { status: 206, headers });
+        }
+      }
     }
 
-    // obj.body is a ReadableStream — return it directly
+    const obj = await c.env.R2.get(key);
+    if (!obj) {
+      return c.json({ ok: false, error: `文件不存在：${key}` }, 404);
+    }
+    const headers: Record<string, string> = {
+      ...baseHeaders,
+      'Content-Length': String(size),
+    };
     return new Response(obj.body, { status: 200, headers });
   } catch (e: any) {
     return c.json({ ok: false, error: e?.message || String(e) }, 404);
