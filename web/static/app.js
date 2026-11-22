@@ -10,6 +10,8 @@ const state = {
   taskFilter: '',
   taskId: null,
   task: null,
+  cloudDetail: false,
+  cloudUploading: false,
   logOffset: 0,
   sourceMode: 'auto',
   articlePath: null,
@@ -91,16 +93,13 @@ function toast(msg, isErr = false) {
 /* ── 视图切换 ───────────────────────────────────────────── */
 
 function showView(name) {
-  // 云端模式无本地任务，不允许进入任务列表
-  if (state.cloudMode && name === 'tasks') {
-    toast('云端模式不支持本地任务列表，请使用「新建任务」页的云端运行', true);
-    return;
-  }
   state.view = name;
   $$('.view').forEach((v) => { v.hidden = v.id !== `view-${name}`; });
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
-  if (name === 'tasks') { loadTasks(); startListPoll(); }
-  else stopListPoll();
+  if (name === 'tasks') {
+    if (state.cloudMode) loadCloudTasks(); else loadTasks();
+    startListPoll();
+  } else stopListPoll();
   if (name !== 'detail') { stopDetailPoll(); }
   if (name === 'settings') { loadGithubConfig(); }
   if (name === 'files') { loadFiles(); loadR2Stats(); }
@@ -108,7 +107,10 @@ function showView(name) {
 
 function startListPoll() {
   stopListPoll();
-  state.listTimer = setInterval(() => { if (state.view === 'tasks') loadTasks(true); }, 5000);
+  state.listTimer = setInterval(() => {
+    if (state.view !== 'tasks') return;
+    if (state.cloudMode) loadCloudTasks(true); else loadTasks(true);
+  }, 5000);
 }
 function stopListPoll() {
   if (state.listTimer) { clearInterval(state.listTimer); state.listTimer = null; }
@@ -159,9 +161,9 @@ function applyCloudMode() {
     badge.hidden = !cloud;
   }
 
-  // 隐藏「任务列表」tab（云端无本地任务）
+  // 「任务列表」tab 始终保留：云端模式展示 GitHub Actions 运行记录
   const tasksTab = $$('.tab').find((t) => t.dataset.view === 'tasks');
-  if (tasksTab) tasksTab.hidden = cloud;
+  if (tasksTab) tasksTab.textContent = cloud ? '运行记录' : '任务列表';
 
   // 新建任务页：隐藏本地独有功能
   const createBtn = $('#createBtn');
@@ -654,6 +656,54 @@ async function cloudUploadBili() {
 
 /* ── 任务列表 ───────────────────────────────────────────── */
 
+// 云端运行记录：把 GitHub Actions run 归一化为与本地任务同构的结构
+function cloudStatus(run) {
+  if (run.status === 'completed') {
+    if (run.conclusion === 'success') return 'success';
+    if (run.conclusion === 'failure' || run.conclusion === 'cancelled' || run.conclusion === 'timed_out') return 'failed';
+    return 'completed';
+  }
+  if (run.status === 'in_progress' || run.status === 'queued' || run.status === 'waiting') return 'running';
+  return 'queued';
+}
+
+function cloudStatusLabel(run) {
+  if (run.status === 'completed') return run.conclusion || '已完成';
+  if (run.status === 'in_progress') return '运行中';
+  if (run.status === 'queued') return '排队中';
+  return run.status || '—';
+}
+
+function fmtDateTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadCloudTasks(silent = false) {
+  try {
+    const r = await api('/api/github/runs');
+    state.tasks = (r.runs || []).map((run) => ({
+      id: 'gh-' + run.id,
+      cloud: true,
+      run_id: run.id,
+      title: run.name || 'GitHub Actions 运行',
+      date8: (run.created_at || '').slice(0, 10).replaceAll('-', ''),
+      status: cloudStatus(run),
+      status_label: cloudStatusLabel(run),
+      step: run.status === 'completed' ? (run.conclusion || '已完成') : run.status,
+      created_at: fmtDateTime(run.created_at),
+      html_url: run.html_url,
+      progress: { current: 0, total: 0 },
+    }));
+    renderTasks();
+  } catch (e) {
+    if (!silent) toast(e.message, true);
+  }
+}
+
 async function loadTasks(silent = false) {
   try {
     state.tasks = await api('/api/tasks');
@@ -686,6 +736,7 @@ function renderTasks() {
     const statusText = t.status_label || t.status;
     const isActive = t.status === 'running' || t.status === 'queued';
     const isFailed = t.status === 'failed';
+    const isCloud = !!t.cloud;
 
     div.innerHTML = `
       <div class="task-item-header">
@@ -693,9 +744,9 @@ function renderTasks() {
         <span class="status-badge ${badgeClass(t.status)}">${escapeHtml(statusText)}</span>
       </div>
       <div class="task-meta">
-        <span>📅 ${fmtDate8(t.date8)}</span>
+        ${isCloud ? `<span>📅 ${escapeHtml(t.created_at || '')}</span>` : `<span>📅 ${fmtDate8(t.date8)}</span>`}
         ${t.step ? `<span>📍 ${escapeHtml(t.step)}</span>` : ''}
-        <span>🕐 ${escapeHtml(fmtTime(t.created_at))}</span>
+        ${t.created_at && !isCloud ? `<span>🕐 ${escapeHtml(fmtTime(t.created_at))}</span>` : ''}
         ${t.bvid ? `<span>BV：${escapeHtml(t.bvid)}</span>` : ''}
         ${t.error ? `<span class="meta-error">⚠ ${escapeHtml(t.error)}</span>` : ''}
       </div>
@@ -706,16 +757,18 @@ function renderTasks() {
         <span class="progress-text">${pct}%</span>
       </div>
       <div class="task-actions">
+        ${isCloud && t.html_url ? `<a class="btn btn-ghost btn-sm" href="${escapeHtml(t.html_url)}" target="_blank" rel="noreferrer" data-action="logs">查看日志</a>` : ''}
         ${isFailed ? '<button class="btn btn-secondary btn-sm" data-action="retry">重试</button>' : ''}
         ${isActive ? '<button class="btn btn-danger btn-sm" data-action="cancel">取消</button>' : ''}
-        <button class="btn btn-ghost btn-sm" data-action="delete">删除</button>
+        ${!isCloud ? '<button class="btn btn-ghost btn-sm" data-action="delete">删除</button>' : ''}
       </div>`;
     div.addEventListener('click', (ev) => {
       const action = ev.target.dataset.action;
+      if (action === 'logs') { ev.stopPropagation(); return; }
       if (action === 'retry') { ev.stopPropagation(); retryTask(t.id); return; }
       if (action === 'cancel') { ev.stopPropagation(); cancelTask(t.id); return; }
       if (action === 'delete') { ev.stopPropagation(); deleteTask(t.id); return; }
-      openDetail(t.id);
+      if (isCloud) openCloudDetail(t.run_id); else openDetail(t.id);
     });
     list.appendChild(div);
   }
@@ -753,6 +806,7 @@ async function deleteTask(id) {
 
 function openDetail(id) {
   state.taskId = id;
+  state.cloudDetail = false;
   state.task = null;
   state.logOffset = 0;
   $('#logBox').textContent = '';
@@ -760,6 +814,12 @@ function openDetail(id) {
   delete $('#mediaArea').dataset.rendered;
   $('#detailError').hidden = true;
   $('#biliResult').hidden = true;
+  $('#detailLogsLink').hidden = true;
+  $('#cloudSteps').innerHTML = '';
+  $('#cloudSteps').hidden = true;
+  $('#detailStep').textContent = '等待执行';
+  $('#detailProgressText').textContent = '';
+  $('#detailProgress').style.width = '0%';
   showView('detail');
   refreshDetail();
   startDetailPoll();
@@ -768,13 +828,24 @@ function openDetail(id) {
 async function refreshDetail(silent = false) {
   if (!state.taskId) return;
   try {
-    const t = await api(`/api/tasks/${state.taskId}`);
-    state.task = t;
-    renderDetail(t);
-    await pullLogs();
-    const finished = ['success', 'failed', 'skipped', 'cancelled'].includes(t.status);
-    if (finished && t.upload_status !== 'uploading') {
-      stopDetailPoll();
+    if (state.cloudDetail) {
+      const r = await api(`/api/github/run?id=${encodeURIComponent(state.taskId)}`);
+      if (!r.ok || !r.run) {
+        if (!silent) toast(r.error || '查询运行失败', true);
+        return;
+      }
+      renderCloudDetail(r.run);
+      const finished = r.run.status === 'completed';
+      if (finished) stopDetailPoll();
+    } else {
+      const t = await api(`/api/tasks/${state.taskId}`);
+      state.task = t;
+      renderDetail(t);
+      await pullLogs();
+      const finished = ['success', 'failed', 'skipped', 'cancelled'].includes(t.status);
+      if (finished && t.upload_status !== 'uploading') {
+        stopDetailPoll();
+      }
     }
   } catch (e) {
     if (!silent) toast(e.message, true);
@@ -796,6 +867,9 @@ function renderDetail(t) {
   const errEl = $('#detailError');
   if (t.error) { errEl.hidden = false; errEl.textContent = t.error; } else { errEl.hidden = true; }
 
+  // 本地任务详情：隐藏云端专属元素
+  $('#cloudSteps').hidden = true;
+  $('#detailLogsLink').hidden = true;
   $('#cancelBtn').hidden = !(t.status === 'running' || t.status === 'queued');
   $('#uploadBtn').hidden = t.status !== 'success';
   $('#uploadBtn').disabled = t.upload_status === 'uploading';
@@ -839,6 +913,210 @@ function renderMedia(t) {
     parts.push('<p class="hint">未找到视频产物，请查看日志。</p>');
   }
   area.innerHTML = parts.join('');
+}
+
+/* ── 云端运行详情 ───────────────────────────────────────── */
+
+function openCloudDetail(runId) {
+  state.taskId = String(runId);
+  state.cloudDetail = true;
+  state.task = null;
+  state.logOffset = 0;
+  $('#logBox').textContent = '';
+  $('#mediaArea').innerHTML = '<p class="hint">运行完成后可在此预览视频与封面。</p>';
+  delete $('#mediaArea').dataset.rendered;
+  $('#detailError').hidden = true;
+  $('#biliResult').hidden = true;
+  $('#detailLogsLink').hidden = true;
+  $('#cloudSteps').innerHTML = '';
+  $('#cloudSteps').hidden = true;
+  $('#detailStep').textContent = '等待执行';
+  $('#detailProgressText').textContent = '';
+  $('#detailProgress').style.width = '0%';
+  showView('detail');
+  refreshDetail();
+  startDetailPoll();
+}
+
+function renderCloudDetail(run) {
+  $('#detailTitle').textContent = run.name || '云端运行详情';
+  const badge = $('#detailStatus');
+  const status = cloudStatus(run);
+  badge.className = `badge ${badgeClass(status)}`;
+  badge.textContent = cloudStatusLabel(run);
+
+  // 步骤列表
+  const stepsBox = $('#cloudSteps');
+  const steps = run.steps || [];
+  if (steps.length > 0) {
+    const doneCount = steps.filter((s) => s.status === 'completed').length;
+    const totalCount = steps.length;
+    const pct = Math.round((doneCount / totalCount) * 100);
+    $('#detailProgress').style.width = `${pct}%`;
+    $('#detailStep').textContent = `${doneCount}/${totalCount} 步骤完成`;
+    $('#detailProgressText').textContent = `${doneCount}/${totalCount} · ${pct}%`;
+
+    const stepIcons = {
+      completed: '✓',
+      in_progress: '●',
+      queued: '○',
+      waiting: '○',
+      not_started: '○',
+    };
+    const stepClass = {
+      completed: 'step-done',
+      in_progress: 'step-active',
+      queued: 'step-pending',
+      waiting: 'step-pending',
+      not_started: 'step-pending',
+    };
+    const parts = [];
+    for (const step of steps) {
+      const icon = stepIcons[step.status] || '·';
+      const cls = stepClass[step.status] || '';
+      parts.push(`<div class="cloud-step ${cls}"><span class="step-icon">${icon}</span> <span class="step-name">${escapeHtml(step.name)}</span></div>`);
+    }
+    stepsBox.innerHTML = parts.join('');
+    stepsBox.hidden = false;
+  } else {
+    stepsBox.hidden = true;
+    const pct = run.status === 'completed' ? (run.conclusion === 'success' ? 100 : 0) : 0;
+    $('#detailProgress').style.width = `${pct}%`;
+    $('#detailStep').textContent = run.status === 'completed' ? (run.conclusion || '已完成') : run.status;
+    $('#detailProgressText').textContent = '';
+  }
+
+  // 日志链接
+  const logsLink = $('#detailLogsLink');
+  if (run.html_url) {
+    logsLink.hidden = false;
+    logsLink.href = run.html_url;
+  } else {
+    logsLink.hidden = true;
+  }
+
+  // 错误
+  const errEl = $('#detailError');
+  if (run.conclusion === 'failure' || run.conclusion === 'timed_out' || run.conclusion === 'cancelled') {
+    errEl.hidden = false;
+    errEl.textContent = `运行结束（${run.conclusion}），请查看 GitHub 日志了解详情。`;
+  } else {
+    errEl.hidden = true;
+  }
+
+  // 云端模式无取消按钮
+  $('#cancelBtn').hidden = true;
+
+  // 上传B站按钮：仅成功时显示
+  $('#uploadBtn').hidden = !(run.status === 'completed' && run.conclusion === 'success');
+  $('#uploadBtn').disabled = state.cloudUploading;
+  $('#uploadBtn').textContent = state.cloudUploading ? '触发中…' : '上传B站';
+
+  // B站结果区隐藏（云端在媒体区展示）
+  $('#biliResult').hidden = true;
+
+  // 成功后加载产物
+  if (run.status === 'completed' && run.conclusion === 'success' && !$('#mediaArea').dataset.rendered) {
+    renderCloudMedia(run);
+    $('#mediaArea').dataset.rendered = '1';
+  }
+}
+
+/** 从 R2 加载指定运行的产物用于预览、下载 */
+async function renderCloudMedia(run) {
+  const area = $('#mediaArea');
+  area.innerHTML = '<p class="hint">正在加载云端产物……</p>';
+  try {
+    // 从 run.created_at 提取日期，匹配 R2 中的运行目录
+    const createdAt = run.created_at || '';
+    const date8 = createdAt.slice(0, 10).replaceAll('-', ''); // YYYYMMDD
+    if (!date8) {
+      area.innerHTML = '<p class="hint">未找到运行日期，无法定位产物。</p>';
+      return;
+    }
+    // 列出 R2 中所有运行目录
+    const r = await api('/api/r2/files?prefix=ashare-tucao/');
+    if (!r.ok || !r.files || r.files.length === 0) {
+      area.innerHTML = '<p class="hint">R2 中未找到产物文件。</p>';
+      return;
+    }
+    const runPrefixes = new Set();
+    for (const f of r.files) {
+      const parts = f.key.split('/');
+      if (parts.length >= 2 && parts[0] === 'ashare-tucao') {
+        runPrefixes.add(parts.slice(0, 2).join('/'));
+      }
+    }
+    if (runPrefixes.size === 0) {
+      area.innerHTML = '<p class="hint">R2 中未找到运行目录。</p>';
+      return;
+    }
+    // 匹配日期对应的运行目录（可能同日多次，取最新）
+    const matching = Array.from(runPrefixes)
+      .filter((p) => p.startsWith(`ashare-tucao/${date8}_`))
+      .sort()
+      .reverse();
+    const latestPrefix = matching[0] || Array.from(runPrefixes).sort().reverse()[0];
+
+    const detail = await api(`/api/r2/files?prefix=${encodeURIComponent(latestPrefix + '/')}`);
+    if (!detail.ok || !detail.files) {
+      area.innerHTML = `<p class="hint">未找到运行目录 ${escapeHtml(latestPrefix)} 下的产物。</p>`;
+      return;
+    }
+    const files = detail.files;
+    const videoFile = files.find((f) => f.key.endsWith('video_final.mp4'));
+    const coverFile = files.find((f) => f.key.endsWith('cover.png'));
+
+    const parts = [];
+    if (videoFile) {
+      const videoUrl = `/api/r2/file?key=${encodeURIComponent(videoFile.key)}`;
+      parts.push(`<video controls preload="metadata" src="${videoUrl}"></video>`);
+      parts.push(`<div class="media-actions">
+        <a class="btn btn-ghost btn-sm" href="${videoUrl}" download>下载视频</a>
+      </div>`);
+    }
+    if (coverFile) {
+      const coverUrl = `/api/r2/file?key=${encodeURIComponent(coverFile.key)}`;
+      parts.push(`<img src="${coverUrl}" alt="视频封面" />`);
+      parts.push(`<div class="media-actions"><a class="btn btn-ghost btn-sm" href="${coverUrl}" download>下载封面</a></div>`);
+    }
+    if (!videoFile && !coverFile) {
+      parts.push('<p class="hint">未找到视频/封面产物。</p>');
+    }
+    area.innerHTML = parts.join('');
+  } catch (e) {
+    area.innerHTML = `<p class="hint error-text">加载产物失败：${escapeHtml(e.message)}</p>`;
+  }
+}
+
+/** 从云端运行详情触发 B站上传（upload_only 模式） */
+async function cloudUploadBiliFromDetail() {
+  const btn = $('#uploadBtn');
+  if (!state.taskId) return;
+  btn.disabled = true;
+  btn.textContent = '触发中…';
+  state.cloudUploading = true;
+  try {
+    // 查询运行详情获取日期
+    const r = await api(`/api/github/run?id=${encodeURIComponent(state.taskId)}`);
+    if (!r.ok || !r.run) throw new Error(r.error || '查询运行失败');
+    const date8 = (r.run.created_at || '').slice(0, 10).replaceAll('-', '');
+    const resp = await api('/api/bilibili/upload', {
+      method: 'POST',
+      body: JSON.stringify({ date: date8 }),
+    });
+    toast(resp.message || 'B站上传任务已触发');
+    state.cloudUploading = false;
+    btn.disabled = false;
+    btn.textContent = '上传B站';
+    // 开始轮询最新运行状态
+    startCloudRunPoll();
+  } catch (e) {
+    toast(e.message, true);
+    state.cloudUploading = false;
+    btn.disabled = false;
+    btn.textContent = '上传B站';
+  }
 }
 
 async function pullLogs() {
@@ -1380,7 +1658,10 @@ async function init() {
   });
   $('#backBtn').addEventListener('click', () => showView('tasks'));
   $('#cancelBtn').addEventListener('click', () => state.taskId && cancelTask(state.taskId));
-  $('#uploadBtn').addEventListener('click', manualUpload);
+  $('#uploadBtn').addEventListener('click', () => {
+    if (state.cloudDetail) cloudUploadBiliFromDetail();
+    else manualUpload();
+  });
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
   $('#testLlmBtn').addEventListener('click', testLlm);
   $('#biliLoginBtn').addEventListener('click', biliLogin);

@@ -211,7 +211,7 @@ app.get('/api/github/status', (c) => {
   });
 });
 
-/** 查询最近一次 GitHub Actions 运行状态（含步骤进度） */
+/** 查询 GitHub Actions 运行状态（?id= 指定具体运行，缺省取最近一次），含步骤进度 */
 app.get('/api/github/run', async (c) => {
   const pat = c.env.GITHUB_PAT;
   if (!pat) {
@@ -228,19 +228,32 @@ app.get('/api/github/run', async (c) => {
   };
 
   try {
-    // 获取最近一次运行
-    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=1`;
-    const resp = await fetch(runsUrl, { headers });
-    if (!resp.ok) {
-      return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
-    }
-    const data = await resp.json() as any;
-    const runs = data?.workflow_runs || [];
-    if (runs.length === 0) {
-      return c.json({ ok: true, run: null, message: '暂无运行记录' });
+    let run: any;
+    const runId = c.req.query('id');
+    if (runId) {
+      const resp = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/actions/runs/${encodeURIComponent(runId)}`,
+        { headers }
+      );
+      if (!resp.ok) {
+        return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
+      }
+      run = await resp.json() as any;
+    } else {
+      // 获取最近一次运行
+      const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=1`;
+      const resp = await fetch(runsUrl, { headers });
+      if (!resp.ok) {
+        return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
+      }
+      const data = await resp.json() as any;
+      const runs = data?.workflow_runs || [];
+      if (runs.length === 0) {
+        return c.json({ ok: true, run: null, message: '暂无运行记录' });
+      }
+      run = runs[0];
     }
 
-    const run = runs[0];
     const runInfo = {
       id: run.id,
       name: run.name,
@@ -271,6 +284,46 @@ app.get('/api/github/run', async (c) => {
     }
 
     return c.json({ ok: true, run: runInfo });
+  } catch (e: any) {
+    return c.json({ ok: false, error: `查询失败：${e?.message || e}` }, 500);
+  }
+});
+
+/** 最近多次云端运行记录（用于任务列表） */
+app.get('/api/github/runs', async (c) => {
+  const pat = c.env.GITHUB_PAT;
+  if (!pat) {
+    return c.json({ ok: false, error: '未配置 GitHub PAT' }, 400);
+  }
+
+  const owner = c.env.GITHUB_REPO_OWNER;
+  const repo = c.env.GITHUB_REPO_NAME;
+  const headers = {
+    Authorization: `Bearer ${pat}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'ashare-tucao-remotion-worker',
+  };
+
+  try {
+    const per = Math.min(Math.max(parseInt(c.req.query('per_page') || '20', 10) || 20, 1), 50);
+    const url = `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=${per}`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) {
+      return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
+    }
+    const data = await resp.json() as any;
+    const runs = (data?.workflow_runs || []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      event: r.event,
+      status: r.status,
+      conclusion: r.conclusion,
+      html_url: r.html_url,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }));
+    return c.json({ ok: true, runs });
   } catch (e: any) {
     return c.json({ ok: false, error: `查询失败：${e?.message || e}` }, 500);
   }

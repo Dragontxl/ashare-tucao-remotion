@@ -962,8 +962,8 @@ async def github_dispatch(request: Request):
 
 
 @app.get("/api/github/run")
-def github_run():
-    """查询最近一次 GitHub Actions 运行状态（含步骤进度）。"""
+def github_run(run_id: str = ""):
+    """查询 GitHub Actions 运行状态（run_id 指定具体运行，缺省取最近一次），含步骤进度。"""
     gh = _github_config()
     if not gh["pat"]:
         raise HTTPException(400, "未配置 GitHub PAT")
@@ -975,17 +975,23 @@ def github_run():
         "User-Agent": "ashare-tucao-remotion",
     }
 
-    # 获取最近一次运行
-    runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs?per_page=1"
     try:
-        req = urllib.request.Request(runs_url, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=15)
-        data = json.loads(resp.read())
-        runs = data.get("workflow_runs", [])
-        if not runs:
-            return {"ok": True, "run": None, "message": "暂无运行记录"}
+        # 获取运行（指定 id 或最近一次）
+        if run_id:
+            runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs/{run_id}"
+            req = urllib.request.Request(runs_url, headers=headers)
+            resp = urllib.request.urlopen(req, timeout=15)
+            run = json.loads(resp.read())
+        else:
+            runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs?per_page=1"
+            req = urllib.request.Request(runs_url, headers=headers)
+            resp = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            runs = data.get("workflow_runs", [])
+            if not runs:
+                return {"ok": True, "run": None, "message": "暂无运行记录"}
+            run = runs[0]
 
-        run = runs[0]
         run_info = {
             "id": run["id"],
             "name": run.get("name", ""),
@@ -1015,6 +1021,45 @@ def github_run():
             pass  # 步骤获取失败不影响整体返回
 
         return {"ok": True, "run": run_info}
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"GitHub API 失败：{e.code}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"查询失败：{str(e)}")
+
+
+@app.get("/api/github/runs")
+def github_runs(per_page: int = 20):
+    """最近多次云端运行记录（用于任务列表）。"""
+    gh = _github_config()
+    if not gh["pat"]:
+        raise HTTPException(400, "未配置 GitHub PAT")
+
+    per = max(1, min(int(per_page or 20), 50))
+    headers = {
+        "Authorization": f"Bearer {gh['pat']}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "ashare-tucao-remotion",
+    }
+
+    try:
+        runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs?per_page={per}"
+        req = urllib.request.Request(runs_url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read())
+        runs = []
+        for r in data.get("workflow_runs", []):
+            runs.append({
+                "id": r["id"],
+                "name": r.get("name", ""),
+                "event": r.get("event", ""),
+                "status": r.get("status", ""),
+                "conclusion": r.get("conclusion"),
+                "html_url": r.get("html_url", ""),
+                "created_at": r.get("created_at", ""),
+                "updated_at": r.get("updated_at", ""),
+            })
+        return {"ok": True, "runs": runs}
     except urllib.error.HTTPError as e:
         raise HTTPException(502, f"GitHub API 失败：{e.code}")
     except Exception as e:  # noqa: BLE001
