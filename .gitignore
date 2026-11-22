@@ -49,3 +49,4 @@ web/data/
 
 # Wrangler 本地状态
 worker/.wrangler/
+README.md

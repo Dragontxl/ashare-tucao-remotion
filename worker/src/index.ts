@@ -234,7 +234,7 @@ app.get('/api/github/run', async (c) => {
     if (!resp.ok) {
       return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
     }
-    const data = await resp.json();
+    const data = await resp.json() as any;
     const runs = data?.workflow_runs || [];
     if (runs.length === 0) {
       return c.json({ ok: true, run: null, message: '暂无运行记录' });
@@ -257,7 +257,7 @@ app.get('/api/github/run', async (c) => {
     const jobsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`;
     const jobsResp = await fetch(jobsUrl, { headers });
     if (jobsResp.ok) {
-      const jobsData = await jobsResp.json();
+      const jobsData = await jobsResp.json() as any;
       const jobs = jobsData?.jobs || [];
       for (const job of jobs) {
         for (const step of job.steps || []) {
@@ -393,7 +393,7 @@ app.get('/api/r2/file', async (c) => {
     }
 
     const headers: Record<string, string> = {
-      'Content-Type': obj.httpMetadata.contentType || 'application/octet-stream',
+      'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'public, max-age=3600',
     };
@@ -408,6 +408,251 @@ app.get('/api/r2/file', async (c) => {
     return new Response(obj.body, { status: 200, headers });
   } catch (e: any) {
     return c.json({ ok: false, error: e?.message || String(e) }, 404);
+  }
+});
+
+/**
+ * 列出 R2 文件（支持文件夹结构，用于文件浏览器）
+ * GET /api/r2/files?prefix=&cursor=
+ */
+app.get('/api/r2/files', async (c) => {
+  if (!c.env.R2) {
+    return c.json({ ok: false, error: 'R2 未绑定', files: [], folders: [] });
+  }
+  const prefix = c.req.query('prefix') || '';
+  const delimiter = '/';
+  const cursor = c.req.query('cursor') || undefined;
+  const limit = 1000;
+  const maxPages = 20;
+
+  try {
+    const objects: any[] = [];
+    const folderSet = new Set<string>();
+    let truncated = false;
+    let nextCursor: string | undefined = cursor;
+    let pages = 0;
+
+    do {
+      const options: any = { prefix, limit };
+      if (delimiter) options.delimiter = delimiter;
+      if (nextCursor) options.cursor = nextCursor;
+      const result = await c.env.R2.list(options);
+      for (const obj of result.objects || []) objects.push(obj);
+      for (const fp of result.delimitedPrefixes || []) folderSet.add(fp);
+      truncated = !!result.truncated;
+      nextCursor = (result as any).cursor || undefined;
+      pages++;
+    } while (truncated && nextCursor && pages < maxPages);
+
+    const folders = Array.from(folderSet).map((fp: string) => {
+      const name = fp.replace(/^\/|\/$/g, '');
+      return { key: fp, name, type: 'directory', size: 0, lastModified: null };
+    });
+    const files = objects.map((obj: any) => {
+      const name = obj.key.split('/').pop() || obj.key;
+      return {
+        key: obj.key,
+        name,
+        type: 'file',
+        size: obj.size,
+        lastModified: obj.uploaded,
+        contentType: obj.httpMetadata?.contentType,
+      };
+    });
+
+    return c.json({
+      ok: true,
+      files,
+      folders,
+      truncated: truncated && !!nextCursor,
+      cursor: truncated ? nextCursor || null : null,
+      prefix,
+    });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e), files: [], folders: [] });
+  }
+});
+
+/** 删除文件或文件夹 */
+app.post('/api/r2/delete', async (c) => {
+  if (!c.env.R2) return c.json({ ok: false, error: 'R2 未绑定' }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  const key = body.key || '';
+  const isDir = !!body.is_directory;
+  if (!key) return c.json({ ok: false, error: '缺少 key' }, 400);
+
+  try {
+    if (isDir) {
+      let totalDeleted = 0;
+      let cursor: string | undefined;
+      do {
+        const result = await c.env.R2.list({ prefix: key, limit: 1000, cursor });
+        const keys = result.objects.map((o: any) => o.key);
+        if (keys.length > 0) { await c.env.R2.delete(keys); totalDeleted += keys.length; }
+        cursor = result.truncated ? result.cursor : undefined;
+      } while (cursor);
+      try { await c.env.R2.delete(key.replace(/\/$/, '')); } catch { /* ignore */ }
+      return c.json({ ok: true, deleted: totalDeleted });
+    }
+    await c.env.R2.delete(key);
+    return c.json({ ok: true });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+
+/** 批量删除 */
+app.post('/api/r2/batch-delete', async (c) => {
+  if (!c.env.R2) return c.json({ ok: false, error: 'R2 未绑定' }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  const keys: string[] = body.keys || [];
+  if (keys.length === 0) return c.json({ ok: false, error: '缺少 keys' }, 400);
+
+  let totalDeleted = 0;
+  const errors: string[] = [];
+  for (const key of keys) {
+    try {
+      await c.env.R2.delete(key);
+      totalDeleted++;
+    } catch {
+      try {
+        let cursor: string | undefined;
+        do {
+          const result = await c.env.R2.list({ prefix: key, limit: 1000, cursor });
+          const objKeys = result.objects.map((o: any) => o.key);
+          if (objKeys.length > 0) { await c.env.R2.delete(objKeys); totalDeleted += objKeys.length; }
+          cursor = result.truncated ? result.cursor : undefined;
+        } while (cursor);
+        try { await c.env.R2.delete(key.replace(/\/$/, '')); } catch { /* ignore */ }
+      } catch (err: any) {
+        errors.push(`${key}: ${err?.message || err}`);
+      }
+    }
+  }
+  return c.json({ ok: true, deleted: totalDeleted, errors });
+});
+
+/** 新建文件夹 */
+app.post('/api/r2/create-folder', async (c) => {
+  if (!c.env.R2) return c.json({ ok: false, error: 'R2 未绑定' }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  const key = body.key || '';
+  if (!key) return c.json({ ok: false, error: '缺少 key' }, 400);
+
+  try {
+    const folderKey = key.endsWith('/') ? key : `${key}/`;
+    await c.env.R2.put(folderKey, '', {
+      httpMetadata: { contentType: 'application/x-directory' },
+    });
+    return c.json({ ok: true, key: folderKey });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+
+/** 上传文件到 R2（base64） */
+app.post('/api/r2/upload', async (c) => {
+  if (!c.env.R2) return c.json({ ok: false, error: 'R2 未绑定' }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  const filename = body.filename || '';
+  const content = body.content || '';
+  const contentType = body.contentType || '';
+  const prefix = body.prefix || '';
+  if (!filename || !content) return c.json({ ok: false, error: '缺少 filename 或 content' }, 400);
+
+  try {
+    const decoded = Uint8Array.from(atob(content), (b) => b.charCodeAt(0));
+    const safeName = filename.replace(/[^\w.\-]/g, '_');
+    const key = prefix ? `${prefix.replace(/\/+$/, '')}/${safeName}` : safeName;
+    await c.env.R2.put(key, decoded, {
+      httpMetadata: { contentType: contentType || 'application/octet-stream' },
+    });
+    return c.json({ ok: true, key, size: decoded.byteLength, filename });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+
+/** 存储统计 */
+app.get('/api/r2/stats', async (c) => {
+  if (!c.env.R2) return c.json({ ok: false, error: 'R2 未绑定' });
+  const prefix = c.req.query('prefix') || '';
+  try {
+    let totalSize = 0;
+    let totalFiles = 0;
+    let cursor: string | undefined;
+    do {
+      const result = await c.env.R2.list({ prefix, limit: 1000, cursor });
+      for (const obj of result.objects) { totalSize += obj.size; totalFiles++; }
+      cursor = result.truncated ? result.cursor : undefined;
+    } while (cursor);
+    return c.json({ ok: true, totalSize, totalFiles, totalSizeMB: (totalSize / 1024 / 1024).toFixed(2), prefix });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+/** 下载文件（带 Content-Disposition） */
+app.get('/api/r2/download', async (c) => {
+  if (!c.env.R2) return c.json({ ok: false, error: 'R2 未绑定' }, 400);
+  const key = c.req.query('key') || '';
+  if (!key) return c.json({ ok: false, error: '缺少 key 参数' }, 400);
+  try {
+    const obj = await c.env.R2.get(key);
+    if (!obj) return c.json({ ok: false, error: `文件不存在：${key}` }, 404);
+    const filename = key.split('/').pop() || key;
+    const contentType = obj.httpMetadata?.contentType || 'application/octet-stream';
+    return new Response(obj.body, {
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(obj.size),
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
+    });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) }, 404);
+  }
+});
+
+// ─── B站上传（云端：触发 GitHub Actions 仅上传模式）────────────────
+
+app.post('/api/bilibili/upload', async (c) => {
+  const pat = c.env.GITHUB_PAT;
+  if (!pat) {
+    return c.json({ ok: false, error: '未配置 GitHub PAT（请通过 wrangler secret put GITHUB_PAT 设置）' }, 400);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const date = body.date || '';
+
+  const payload = {
+    event_type: 'ashare-tucao-generation',
+    client_payload: {
+      date,
+      upload: 'true',
+      upload_only: 'true',
+    },
+  };
+
+  const url = `https://api.github.com/repos/${c.env.GITHUB_REPO_OWNER}/${c.env.GITHUB_REPO_NAME}/dispatches`;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${pat}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+        'User-Agent': 'ashare-tucao-remotion-worker',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (resp.status === 204) {
+      return c.json({ ok: true, message: 'B站上传任务已触发，请查看运行状态' });
+    }
+    const errText = await resp.text();
+    return c.json({ ok: false, error: `触发失败：${resp.status} ${errText.slice(0, 300)}` }, 502);
+  } catch (e: any) {
+    return c.json({ ok: false, error: `触发失败：${e?.message || e}` }, 500);
   }
 });
 
@@ -482,7 +727,7 @@ app.post('/api/settings/test-llm', async (c) => {
       const errText = await resp.text();
       return c.json({ ok: false, error: `LLM 连接失败：${resp.status} ${errText.slice(0, 200)}` }, 400);
     }
-    const data = await resp.json();
+    const data = await resp.json() as any;
     const reply = data?.choices?.[0]?.message?.content || 'OK';
     return c.json({ ok: true, reply: reply.slice(0, 100) });
   } catch (e: any) {

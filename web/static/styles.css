@@ -412,7 +412,7 @@ option { background: var(--bg2); }
 .cloud-steps {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .cloud-step {
   display: flex;
@@ -421,9 +421,171 @@ option { background: var(--bg2); }
   font-size: 13px;
   color: var(--muted);
   padding: 5px 0;
+  border-bottom: 1px solid rgba(140, 170, 230, 0.06);
 }
-.cloud-step.done { color: var(--green); }
-.cloud-step.active { color: var(--amber); font-weight: 600; }
+.cloud-step:last-child { border-bottom: 0; }
+.cloud-step .step-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.cloud-step.step-done { color: var(--green); }
+.cloud-step.step-done .step-icon {
+  color: #0b2a1c;
+  background: var(--green);
+}
+.cloud-step.step-active { color: var(--amber); font-weight: 600; }
+.cloud-step.step-active .step-icon {
+  color: #2b1a00;
+  background: var(--amber);
+  animation: pulse 1.6s infinite;
+}
+.cloud-step.step-pending .step-icon {
+  color: var(--dim);
+  background: rgba(140, 170, 230, 0.1);
+}
+.cloud-progress-text {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--dim);
+  text-align: right;
+}
+
+/* ── 云端运行结果 ───────────────────────────────────────── */
+.cloud-result-area {
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: 12px;
+  background: rgba(6, 11, 22, 0.5);
+  border: 1px solid var(--line);
+}
+.cloud-result-area .sub-title { margin-top: 0; }
+.cloud-video {
+  width: 100%;
+  border-radius: 10px;
+  background: #000;
+  border: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.cloud-cover {
+  width: 200px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+
+/* ── 文件管理 ───────────────────────────────────────────── */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  font-size: 14px;
+}
+.crumb {
+  background: transparent;
+  border: 0;
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.crumb:hover { background: rgba(121, 180, 255, 0.1); }
+.crumb-sep { color: var(--dim); }
+
+.file-toolbar {
+  margin-bottom: 14px;
+}
+
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.file-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+.file-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(140, 170, 230, 0.08);
+  vertical-align: middle;
+}
+.file-table tbody tr:hover { background: rgba(120, 160, 240, 0.04); }
+.file-name-cell { display: flex; align-items: center; gap: 8px; }
+.file-icon { font-size: 18px; }
+.file-name-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-align: left;
+}
+.file-name-btn:hover { color: var(--blue); background: rgba(121, 180, 255, 0.08); }
+.file-name-btn.dir-btn { font-weight: 600; }
+.file-check {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--red);
+  cursor: pointer;
+}
+
+/* ── 预览弹窗 ───────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 24px;
+}
+.modal-content {
+  background: linear-gradient(180deg, rgba(20, 32, 58, 0.95), rgba(14, 22, 40, 0.95));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow);
+}
+.modal-large { width: 900px; max-width: 95vw; }
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.modal-header h3 { margin: 0; font-size: 16px; letter-spacing: 1px; word-break: break-all; }
+.modal-body {
+  padding: 20px 22px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.modal-body video, .modal-body img { max-width: 100%; }
 
 /* ── 响应式 ───────────────────────────────────────────── */
 @media (max-width: 1080px) {

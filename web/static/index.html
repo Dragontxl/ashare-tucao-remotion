@@ -26,6 +26,7 @@
   <nav class="tabs">
     <button class="tab active" data-view="create">新建任务</button>
     <button class="tab" data-view="tasks">任务列表</button>
+    <button class="tab" data-view="files">文件管理</button>
     <button class="tab" data-view="settings">设置</button>
   </nav>
 
@@ -126,6 +127,7 @@
           <p class="hint" id="createError"></p>
           <p class="hint" id="cloudRunStatus"></p>
           <div id="cloudRunProgress" class="cloud-run-progress" hidden></div>
+          <div id="cloudResultArea" class="cloud-result-area" hidden></div>
         </div>
 
         <div class="card side-card">
@@ -194,6 +196,59 @@
           <div id="mediaArea" class="media-area">
             <p class="hint">任务完成后可在此预览视频与封面。</p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 文件管理 -->
+    <section id="view-files" class="view" hidden>
+      <div class="row-between page-head">
+        <h2>文件管理</h2>
+        <div class="row-gap">
+          <span id="r2Stats" class="muted"></span>
+          <button class="btn btn-ghost btn-sm" id="refreshFilesBtn">刷新</button>
+        </div>
+      </div>
+
+      <!-- 面包屑导航 -->
+      <div class="breadcrumb" id="fileBreadcrumb"></div>
+
+      <!-- 文件操作栏 -->
+      <div class="row-between file-toolbar">
+        <div class="row-gap">
+          <button class="btn btn-secondary btn-sm" id="newFolderBtn">📁 新建文件夹</button>
+          <button class="btn btn-secondary btn-sm" id="uploadFileBtn">📤 上传文件</button>
+          <button class="btn btn-ghost btn-sm" id="deleteSelectedBtn" disabled>🗑 删除选中</button>
+        </div>
+        <input type="file" id="fileUploadInput" hidden multiple />
+      </div>
+
+      <!-- 文件列表 -->
+      <div class="card">
+        <table class="file-table" id="fileTable">
+          <thead>
+            <tr>
+              <th style="width:36px"><input type="checkbox" id="fileCheckAll" /></th>
+              <th>名称</th>
+              <th style="width:100px">大小</th>
+              <th style="width:170px">修改时间</th>
+              <th style="width:160px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="fileTableBody"></tbody>
+        </table>
+        <p class="empty" id="fileEmpty" hidden>此文件夹为空</p>
+        <p class="error-text" id="fileError" hidden></p>
+      </div>
+
+      <!-- 预览弹窗 -->
+      <div class="modal-overlay" id="previewModal" hidden>
+        <div class="modal-content modal-large">
+          <div class="modal-header">
+            <h3 id="previewTitle">预览</h3>
+            <button class="btn btn-ghost btn-sm" id="closePreviewBtn">✕</button>
+          </div>
+          <div class="modal-body" id="previewBody"></div>
         </div>
       </div>
     </section>

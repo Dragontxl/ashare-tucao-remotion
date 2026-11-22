@@ -34,6 +34,11 @@ on:
         required: false
         type: boolean
         default: false
+      upload_only:
+        description: '仅从R2下载已有产物上传B站（不重新渲染）'
+        required: false
+        type: boolean
+        default: false
 
   # 前端触发云端运行（repository_dispatch，event_type = ashare-tucao-generation）
   repository_dispatch:
@@ -59,6 +64,7 @@ jobs:
       FORCE: ${{ github.event.client_payload.force || inputs.force || false }}
       UPLOAD: ${{ github.event.client_payload.upload || inputs.upload || false }}
       SKIP_LLM: ${{ github.event.client_payload.skip_llm || inputs.skip_llm || false }}
+      UPLOAD_ONLY: ${{ github.event.client_payload.upload_only || inputs.upload_only || false }}
 
     steps:
       - name: 检出仓库
@@ -90,13 +96,15 @@ jobs:
         run: npm ci
 
       - name: 确保 Remotion 浏览器可用
+        if: ${{ env.UPLOAD_ONLY != 'true' }}
         run: npx remotion browser ensure
 
-      - name: 安装 Playwright 浏览器（仅上传时需要）
-        if: ${{ env.UPLOAD == 'true' }}
+      - name: 安装 Playwright 浏览器（上传B站时需要）
+        if: ${{ env.UPLOAD == 'true' || env.UPLOAD_ONLY == 'true' }}
         run: python -m playwright install --with-deps chromium
 
       - name: 准备配置与原文
+        if: ${{ env.UPLOAD_ONLY != 'true' }}
         shell: bash
         env:
           BILI_COOKIES: ${{ secrets.BILIBILI_COOKIES }}
@@ -123,6 +131,24 @@ jobs:
             esac
           fi
 
+      - name: 仅上传B站（从R2下载已有产物）
+        if: ${{ env.UPLOAD_ONLY == 'true' }}
+        shell: bash
+        env:
+          BILI_COOKIES: ${{ secrets.BILIBILI_COOKIES }}
+          RUN_DATE: ${{ env.RUN_DATE }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          mkdir -p config
+          cp config/config.example.json config/config.json 2>/dev/null || true
+          if [ -n "$BILI_COOKIES" ]; then
+            printf '%s\n' "$BILI_COOKIES" > config/bilibili_cookies.json
+          fi
+          python scripts/upload_from_r2.py --date "$RUN_DATE"
+
       - name: 覆盖视频标题（可选）
         if: ${{ env.VIDEO_TITLE != '' }}
         env:
@@ -139,6 +165,7 @@ jobs:
           PY
 
       - name: 运行全流程
+        if: ${{ env.UPLOAD_ONLY != 'true' }}
         shell: bash
         env:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
@@ -183,6 +210,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          UPLOAD_ONLY: ${{ env.UPLOAD_ONLY }}
         run: |
           if [ -z "$R2_BUCKET_NAME" ] || [ -z "$R2_ACCESS_KEY_ID" ]; then
             echo "未配置 R2，跳过上传"
@@ -203,7 +231,12 @@ jobs:
                             retries={'max_attempts': 3, 'mode': 'standard'}))
           import datetime
           prefix = 'ashare-tucao/' + datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-          for f in ['video_final.mp4', 'cover.png', 'B站简介.md', 'tags.txt', 'bilibili_result.json']:
+          # upload_only 模式只上传 B站上传结果，不重复上传视频
+          if os.environ.get('UPLOAD_ONLY') == 'true':
+              files_to_upload = ['bilibili_result.json']
+          else:
+              files_to_upload = ['video_final.mp4', 'cover.png', 'B站简介.md', 'tags.txt', 'bilibili_result.json']
+          for f in files_to_upload:
               src = os.path.join('artifacts', f)
               if os.path.exists(src):
                   client.upload_file(src, bucket, f'{prefix}/{f}')

@@ -19,6 +19,13 @@ const state = {
   detailTimer: null,
   cloudRunTimer: null,
   view: 'create',
+  // 文件管理
+  filePrefix: '',
+  fileItems: [],
+  selectedFiles: new Set(),
+  // 云端运行结果
+  cloudRunResult: null,
+  cloudRunDate: '',
 };
 
 /* ── 基础工具 ───────────────────────────────────────────── */
@@ -95,6 +102,7 @@ function showView(name) {
   else stopListPoll();
   if (name !== 'detail') { stopDetailPoll(); }
   if (name === 'settings') { loadGithubConfig(); }
+  if (name === 'files') { loadFiles(); loadR2Stats(); }
 }
 
 function startListPoll() {
@@ -450,6 +458,7 @@ async function cloudRun() {
       statusEl.textContent = '⚠️ 请先选择要上传的文章文件（支持 .md / .txt）。';
     }
     const payload = collectCloudPayload();
+    state.cloudRunDate = payload.date;
     const r = await api('/api/github/dispatch', { method: 'POST', body: JSON.stringify(payload) });
     statusEl.textContent = `✅ ${r.message}，正在查询运行状态……`;
     toast('GitHub Actions 已触发');
@@ -490,8 +499,10 @@ async function refreshCloudRunProgress() {
     if (finished) {
       stopCloudRunPoll();
       if (r.run.conclusion === 'success') {
-        $('#cloudRunStatus').textContent = '✅ 云端运行完成，产物已上传到 R2。可在下方查看或前往 R2 产物页查看。';
+        $('#cloudRunStatus').textContent = '✅ 云端运行完成，产物已上传到 R2。';
         toast('云端运行完成');
+        // 加载最新 R2 产物用于预览
+        await loadCloudResult();
       } else {
         $('#cloudRunStatus').textContent = `❌ 云端运行结束（${r.run.conclusion}），请查看 GitHub 日志。`;
         toast(`云端运行${r.run.conclusion}`, true);
@@ -509,30 +520,135 @@ function renderCloudRunProgress(run) {
   box.hidden = false;
 
   const stepIcons = {
-    completed: '✅',
-    in_progress: '⏳',
-    queued: '🔲',
-    waiting: '⏳',
+    completed: '✓',
+    in_progress: '●',
+    queued: '○',
+    waiting: '○',
+    not_started: '○',
+  };
+  const stepClass = {
+    completed: 'step-done',
+    in_progress: 'step-active',
+    queued: 'step-pending',
+    waiting: 'step-pending',
+    not_started: 'step-pending',
   };
 
   const parts = [];
+  // 头部：运行名 + 状态 + 日志链接
+  const statusBadge = run.conclusion === 'success' ? 'badge-ok'
+    : run.conclusion === 'failure' ? 'badge-err'
+    : run.status === 'in_progress' ? 'badge-run' : 'badge-muted';
   parts.push(`<div class="cloud-run-head">
     <b>${escapeHtml(run.name || 'GitHub Actions')}</b>
-    <span class="badge ${run.conclusion === 'success' ? 'badge-ok' : run.conclusion === 'failure' ? 'badge-err' : 'badge-run'}">${escapeHtml(run.status)}${run.conclusion ? ' · ' + run.conclusion : ''}</span>
+    <span class="badge ${statusBadge}">${escapeHtml(run.status)}${run.conclusion ? ' · ' + run.conclusion : ''}</span>
     <a class="link" href="${escapeHtml(run.html_url)}" target="_blank" rel="noreferrer">查看日志 →</a>
   </div>`);
 
+  // 步骤列表：分阶段展示
   if (run.steps && run.steps.length > 0) {
-    parts.push('<div class="cloud-steps">');
+    const doneCount = run.steps.filter((s) => s.status === 'completed').length;
+    const totalCount = run.steps.length;
+    const pct = Math.round((doneCount / totalCount) * 100);
+    parts.push(`<div class="progress"><div class="progress-bar" style="width:${pct}%"></div></div>`);
+    parts.push(`<div class="cloud-steps">`);
     for (const step of run.steps) {
       const icon = stepIcons[step.status] || '·';
-      const cls = step.status === 'completed' ? 'done' : step.status === 'in_progress' ? 'active' : '';
-      parts.push(`<div class="cloud-step ${cls}"><span>${icon}</span> <span>${escapeHtml(step.name)}</span></div>`);
+      const cls = stepClass[step.status] || '';
+      parts.push(`<div class="cloud-step ${cls}"><span class="step-icon">${icon}</span> <span class="step-name">${escapeHtml(step.name)}</span></div>`);
     }
-    parts.push('</div>');
+    parts.push(`</div>`);
+    parts.push(`<div class="cloud-progress-text">${doneCount}/${totalCount} 步骤完成 · ${pct}%</div>`);
   }
 
   box.innerHTML = parts.join('');
+}
+
+/** 云端运行成功后，加载最新 R2 产物用于预览、下载、上传B站 */
+async function loadCloudResult() {
+  try {
+    const r = await api('/api/r2/files?prefix=ashare-tucao/');
+    if (!r.ok || !r.files || r.files.length === 0) {
+      $('#cloudResultArea').hidden = true;
+      return;
+    }
+    // 找到最新的运行目录（按文件名排序，取最大前缀）
+    const runPrefixes = new Set();
+    for (const f of r.files) {
+      const parts = f.key.split('/');
+      if (parts.length >= 2 && parts[0] === 'ashare-tucao') {
+        runPrefixes.add(parts.slice(0, 2).join('/'));
+      }
+    }
+    if (runPrefixes.size === 0) {
+      $('#cloudResultArea').hidden = true;
+      return;
+    }
+    const latestPrefix = Array.from(runPrefixes).sort().reverse()[0];
+    // 获取该前缀下的所有文件
+    const detail = await api(`/api/r2/files?prefix=${encodeURIComponent(latestPrefix + '/')}`);
+    if (!detail.ok || !detail.files) {
+      $('#cloudResultArea').hidden = true;
+      return;
+    }
+    const files = detail.files;
+    const videoFile = files.find((f) => f.key.endsWith('video_final.mp4'));
+    const coverFile = files.find((f) => f.key.endsWith('cover.png'));
+    const descFile = files.find((f) => f.key.endsWith('B站简介.md'));
+    const tagsFile = files.find((f) => f.key.endsWith('tags.txt'));
+
+    const box = $('#cloudResultArea');
+    box.hidden = false;
+    box.innerHTML = '';
+    const parts = [];
+    parts.push(`<h3 class="sub-title">云端运行产物</h3>`);
+    parts.push(`<p class="hint">运行目录：${escapeHtml(latestPrefix)}</p>`);
+
+    if (videoFile) {
+      const videoUrl = `/api/r2/file?key=${encodeURIComponent(videoFile.key)}`;
+      parts.push(`<video controls preload="metadata" src="${videoUrl}" class="cloud-video"></video>`);
+      parts.push(`<div class="media-actions">
+        <a class="btn btn-primary btn-sm" href="${videoUrl}" download>下载视频</a>
+        <button class="btn btn-secondary btn-sm" id="cloudUploadBiliBtn">上传至 B站</button>
+      </div>`);
+    }
+    if (coverFile) {
+      const coverUrl = `/api/r2/file?key=${encodeURIComponent(coverFile.key)}`;
+      parts.push(`<img src="${coverUrl}" alt="视频封面" class="cloud-cover" />`);
+      parts.push(`<div class="media-actions"><a class="btn btn-ghost btn-sm" href="${coverUrl}" download>下载封面</a></div>`);
+    }
+    if (!videoFile && !coverFile) {
+      parts.push('<p class="hint">未找到视频/封面产物，请检查 R2 存储桶。</p>');
+    }
+
+    box.innerHTML = parts.join('');
+
+    // 绑定上传B站按钮
+    const uploadBtn = $('#cloudUploadBiliBtn');
+    if (uploadBtn) {
+      uploadBtn.addEventListener('click', cloudUploadBili);
+    }
+  } catch (e) {
+    console.error('加载云端结果失败:', e);
+  }
+}
+
+async function cloudUploadBili() {
+  const btn = $('#cloudUploadBiliBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '触发中…'; }
+  try {
+    const date = state.cloudRunDate || inputToDate8($('#taskDate').value);
+    const r = await api('/api/bilibili/upload', {
+      method: 'POST',
+      body: JSON.stringify({ date }),
+    });
+    toast(r.message || 'B站上传任务已触发');
+    // 开始轮询运行状态
+    startCloudRunPoll();
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = '上传至 B站'; }
+  }
 }
 
 /* ── 任务列表 ───────────────────────────────────────────── */
@@ -886,7 +1002,270 @@ async function listR2Files() {
   }
 }
 
-/* ── B站 扫码登录 ───────────────────────────────────────── */
+/* ── 文件管理（R2 文件浏览器）─────────────────────────── */
+
+function formatFileSize(size) {
+  if (!size) return '0 B';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function getFileIcon(file) {
+  if (file.type === 'directory') return '📁';
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.mp4')) return '🎬';
+  if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif')) return '🖼';
+  if (name.endsWith('.md') || name.endsWith('.txt') || name.endsWith('.json')) return '📄';
+  if (name.endsWith('.mp3') || name.endsWith('.wav')) return '🎵';
+  return '📄';
+}
+
+async function loadFiles(silent = false) {
+  const errEl = $('#fileError');
+  errEl.hidden = true;
+  try {
+    const prefix = state.filePrefix || '';
+    const url = `/api/r2/files?prefix=${encodeURIComponent(prefix)}`;
+    const r = await api(url);
+    if (!r.ok) {
+      errEl.hidden = false;
+      errEl.textContent = r.error || 'R2 未配置';
+      $('#fileTableBody').innerHTML = '';
+      $('#fileEmpty').hidden = true;
+      return;
+    }
+    state.fileItems = [
+      ...r.folders.map((f) => ({ ...f, type: 'directory' })),
+      ...r.files.map((f) => ({ ...f, type: 'file' })),
+    ];
+    // 排序：文件夹在前，文件在后
+    state.fileItems.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    renderFiles();
+    renderBreadcrumb();
+  } catch (e) {
+    if (!silent) toast(e.message, true);
+  }
+}
+
+function renderBreadcrumb() {
+  const bc = $('#fileBreadcrumb');
+  const parts = [`<button class="crumb" data-path="">根目录</button>`];
+  const segments = state.filePrefix ? state.filePrefix.replace(/\/$/, '').split('/') : [];
+  let acc = '';
+  for (const seg of segments) {
+    acc += `${seg}/`;
+    parts.push(`<span class="crumb-sep">/</span>`);
+    parts.push(`<button class="crumb" data-path="${escapeHtml(acc)}">${escapeHtml(seg)}</button>`);
+  }
+  bc.innerHTML = parts.join('');
+  bc.querySelectorAll('.crumb').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.filePrefix = btn.dataset.path;
+      state.selectedFiles.clear();
+      updateDeleteBtn();
+      loadFiles(true);
+    });
+  });
+}
+
+function renderFiles() {
+  const body = $('#fileTableBody');
+  const empty = $('#fileEmpty');
+  body.innerHTML = '';
+  empty.hidden = state.fileItems.length > 0;
+
+  for (const item of state.fileItems) {
+    const tr = document.createElement('tr');
+    const isDir = item.type === 'directory';
+    const checked = state.selectedFiles.has(item.key) ? 'checked' : '';
+    const mtime = item.lastModified ? fmtTime(item.lastModified) : '—';
+    const sizeText = isDir ? '—' : formatFileSize(item.size);
+
+    tr.innerHTML = `
+      <td><input type="checkbox" class="file-check" data-key="${escapeHtml(item.key)}" ${checked} /></td>
+      <td class="file-name-cell">
+        <span class="file-icon">${getFileIcon(item)}</span>
+        <button class="file-name-btn ${isDir ? 'dir-btn' : ''}" data-action="${isDir ? 'open' : 'preview'}" data-key="${escapeHtml(item.key)}">${escapeHtml(item.name)}</button>
+      </td>
+      <td class="muted">${sizeText}</td>
+      <td class="muted">${mtime}</td>
+      <td>
+        ${isDir ? `<button class="btn btn-ghost btn-sm" data-action="open" data-key="${escapeHtml(item.key)}">打开</button>` : ''}
+        ${!isDir ? `<button class="btn btn-ghost btn-sm" data-action="preview" data-key="${escapeHtml(item.key)}">预览</button>` : ''}
+        ${!isDir ? `<a class="btn btn-ghost btn-sm" href="/api/r2/download?key=${encodeURIComponent(item.key)}" download>下载</a>` : ''}
+        <button class="btn btn-danger btn-sm" data-action="delete" data-key="${escapeHtml(item.key)}" data-isdir="${isDir}">删除</button>
+      </td>`;
+
+    // 绑定事件
+    tr.querySelectorAll('[data-action]').forEach((btn) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const action = btn.dataset.action;
+        const key = btn.dataset.key;
+        const isDir = btn.dataset.isdir === 'true';
+        if (action === 'open') {
+          state.filePrefix = key.endsWith('/') ? key : `${key}/`;
+          state.selectedFiles.clear();
+          updateDeleteBtn();
+          loadFiles(true);
+        } else if (action === 'preview') {
+          previewFile(key);
+        } else if (action === 'delete') {
+          deleteFile(key, isDir);
+        }
+      });
+    });
+
+    tr.querySelector('.file-check')?.addEventListener('change', (ev) => {
+      const key = ev.target.dataset.key;
+      if (ev.target.checked) {
+        state.selectedFiles.add(key);
+      } else {
+        state.selectedFiles.delete(key);
+      }
+      updateDeleteBtn();
+    });
+
+    body.appendChild(tr);
+  }
+}
+
+function updateDeleteBtn() {
+  const btn = $('#deleteSelectedBtn');
+  const count = state.selectedFiles.size;
+  btn.disabled = count === 0;
+  btn.textContent = count > 0 ? `🗑 删除选中 (${count})` : '🗑 删除选中';
+}
+
+async function loadR2Stats() {
+  try {
+    const r = await api('/api/r2/stats');
+    if (r.ok) {
+      $('#r2Stats').textContent = `${r.totalFiles} 个文件 · ${r.totalSizeMB} MB`;
+    } else {
+      $('#r2Stats').textContent = '';
+    }
+  } catch (_) { /* ignore */ }
+}
+
+async function deleteFile(key, isDir) {
+  const label = isDir ? '文件夹及其所有内容' : '文件';
+  if (!confirm(`确定删除${label}：${key}？`)) return;
+  try {
+    await api('/api/r2/delete', {
+      method: 'POST',
+      body: JSON.stringify({ key, is_directory: isDir }),
+    });
+    toast('已删除');
+    state.selectedFiles.delete(key);
+    updateDeleteBtn();
+    loadFiles(true);
+    loadR2Stats();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function batchDeleteSelected() {
+  const keys = Array.from(state.selectedFiles);
+  if (keys.length === 0) return;
+  if (!confirm(`确定删除选中的 ${keys.length} 个项目？`)) return;
+  try {
+    const r = await api('/api/r2/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ keys }),
+    });
+    toast(`已删除 ${r.deleted} 个项目`);
+    state.selectedFiles.clear();
+    updateDeleteBtn();
+    loadFiles(true);
+    loadR2Stats();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function createFolder() {
+  const name = await prompt('请输入文件夹名称：');
+  if (!name) return;
+  const folderName = name.trim().replace(/[/\\]/g, '');
+  if (!folderName) return;
+  const key = state.filePrefix ? `${state.filePrefix.replace(/\/$/, '')}/${folderName}/` : `${folderName}/`;
+  try {
+    await api('/api/r2/create-folder', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    });
+    toast('文件夹已创建');
+    loadFiles(true);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function uploadFilesToR2() {
+  const input = $('#fileUploadInput');
+  const files = input.files;
+  if (!files || files.length === 0) return;
+  for (const file of files) {
+    const base64 = await fileToBase64(file);
+    const contentType = file.type || 'application/octet-stream';
+    try {
+      await api('/api/r2/upload', {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          content: base64,
+          contentType,
+          prefix: state.filePrefix || '',
+        }),
+      });
+      toast(`已上传：${file.name}`);
+    } catch (e) {
+      toast(`上传失败：${file.name} - ${e.message}`, true);
+    }
+  }
+  input.value = '';
+  loadFiles(true);
+  loadR2Stats();
+}
+
+function previewFile(key) {
+  const item = state.fileItems.find((f) => f.key === key);
+  if (!item) return;
+  const modal = $('#previewModal');
+  const title = $('#previewTitle');
+  const body = $('#previewBody');
+  title.textContent = item.name;
+  body.innerHTML = '';
+  modal.hidden = false;
+
+  const name = key.toLowerCase();
+  const fileUrl = `/api/r2/file?key=${encodeURIComponent(key)}`;
+
+  if (name.endsWith('.mp4')) {
+    body.innerHTML = `<video controls autoplay preload="metadata" src="${fileUrl}" style="max-width:100%;max-height:70vh"></video>`;
+  } else if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif')) {
+    body.innerHTML = `<img src="${fileUrl}" alt="预览" style="max-width:100%;max-height:70vh;display:block;margin:0 auto" />`;
+  } else if (name.endsWith('.md') || name.endsWith('.txt') || name.endsWith('.json')) {
+    body.innerHTML = `<pre class="preview-box" style="max-height:70vh;overflow:auto">正在加载…</pre>`;
+    fetch(fileUrl)
+      .then((r) => r.text())
+      .then((text) => {
+        const pre = body.querySelector('pre');
+        if (pre) pre.textContent = text || '（空文件）';
+      })
+      .catch(() => {
+        const pre = body.querySelector('pre');
+        if (pre) pre.textContent = '加载失败';
+      });
+  } else {
+    body.innerHTML = `<p class="hint">该文件类型不支持预览，请下载查看。</p>
+      <a class="btn btn-primary btn-sm" href="/api/r2/download?key=${encodeURIComponent(key)}" download>下载</a>`;
+  }
+}
+
+function closePreview() {
+  $('#previewModal').hidden = true;
+}
 
 let biliPollTimer = null;
 
@@ -975,6 +1354,29 @@ async function init() {
   $('#cloudRunBtn').addEventListener('click', cloudRun);
   $('#saveGithubBtn').addEventListener('click', saveGithubConfig);
   $('#r2ListBtn').addEventListener('click', listR2Files);
+
+  // 文件管理事件
+  $('#refreshFilesBtn').addEventListener('click', () => { loadFiles(); loadR2Stats(); });
+  $('#newFolderBtn').addEventListener('click', createFolder);
+  $('#uploadFileBtn').addEventListener('click', () => $('#fileUploadInput').click());
+  $('#fileUploadInput').addEventListener('change', uploadFilesToR2);
+  $('#deleteSelectedBtn').addEventListener('click', batchDeleteSelected);
+  $('#fileCheckAll').addEventListener('change', (e) => {
+    const checked = e.target.checked;
+    if (checked) {
+      state.fileItems.forEach((item) => {
+        if (item.type === 'file') state.selectedFiles.add(item.key);
+      });
+    } else {
+      state.selectedFiles.clear();
+    }
+    renderFiles();
+    updateDeleteBtn();
+  });
+  $('#closePreviewBtn').addEventListener('click', closePreview);
+  $('#previewModal').addEventListener('click', (e) => {
+    if (e.target === $('#previewModal')) closePreview();
+  });
 
   await loadHealth();
   setupCreate();

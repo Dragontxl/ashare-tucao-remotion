@@ -1078,24 +1078,336 @@ def r2_list():
 
 
 @app.get("/api/r2/file")
-def r2_file(key: str):
-    """从 R2 下载文件（带 Range 支持，用于视频播放）。"""
+def r2_file(key: str, request: Request):
+    """从 R2 下载文件（支持 Range 请求，用于视频播放）。"""
     client, r2 = _r2_client()
     if client is None:
         raise HTTPException(400, "R2 未配置")
     try:
+        from fastapi.responses import Response as RawResponse
+        headers = {}
+        range_header = request.headers.get("Range")
+
+        if range_header:
+            # 解析 Range: bytes=start-end
+            resp = client.get_object(
+                Bucket=r2["bucket"], Key=key,
+                Range=range_header.replace("bytes=", ""),
+            )
+            status_code = 206
+            headers["Content-Range"] = resp.get("Content-Range", range_header)
+        else:
+            resp = client.get_object(Bucket=r2["bucket"], Key=key)
+            status_code = 200
+
+        body = resp["Body"].read()
+        content_type = resp.get("ContentType", "application/octet-stream")
+        headers["Content-Type"] = content_type
+        headers["Accept-Ranges"] = "bytes"
+        headers["Cache-Control"] = "public, max-age=3600"
+        headers["X-File-Size"] = str(len(body))
+
+        return RawResponse(content=body, status_code=status_code, headers=headers)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(404, f"文件不存在：{str(e)}")
+
+
+# ── R2 文件管理（文件浏览器）──────────────────────────────────────────
+
+@app.get("/api/r2/files")
+def r2_files(prefix: str = "", cursor: str = ""):
+    """列出 R2 文件（支持文件夹结构，用于文件浏览器）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        return {"ok": False, "error": "R2 未配置", "files": [], "folders": []}
+    try:
+        options = {"Bucket": r2["bucket"], "Prefix": prefix, "MaxKeys": 1000}
+        if prefix:
+            options["Delimiter"] = "/"
+        if cursor:
+            options["ContinuationToken"] = cursor
+
+        objects = []
+        folder_set = set()
+        truncated = False
+        next_cursor = cursor or None
+        pages = 0
+        max_pages = 20
+
+        while True:
+            resp = client.list_objects_v2(**options)
+            for obj in resp.get("Contents", []):
+                objects.append(obj)
+            for fp in resp.get("CommonPrefixes", []):
+                folder_set.add(fp["Prefix"])
+            truncated = resp.get("IsTruncated", False)
+            next_cursor = resp.get("NextContinuationToken")
+            pages += 1
+            if not truncated or not next_cursor or pages >= max_pages:
+                break
+            options["ContinuationToken"] = next_cursor
+
+        folders = []
+        for fp in folder_set:
+            name = fp.replace("/", "")
+            folders.append({"key": fp, "name": name, "type": "directory", "size": 0, "lastModified": None})
+
+        files = []
+        for obj in objects:
+            name = obj["Key"].split("/")[-1]
+            files.append({
+                "key": obj["Key"],
+                "name": name,
+                "type": "file",
+                "size": obj["Size"],
+                "lastModified": obj["LastModified"].isoformat() if obj["LastModified"] else None,
+                "contentType": obj.get("ContentType"),
+            })
+
+        return {
+            "ok": True,
+            "files": files,
+            "folders": folders,
+            "truncated": truncated and bool(next_cursor),
+            "cursor": next_cursor if truncated and next_cursor else None,
+            "prefix": prefix,
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e), "files": [], "folders": []}
+
+
+@app.post("/api/r2/delete")
+async def r2_delete(request: Request):
+    """删除文件或文件夹（递归）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        raise HTTPException(400, "R2 未配置")
+    body = await request.json()
+    key = body.get("key", "")
+    is_dir = body.get("is_directory", False)
+    if not key:
+        raise HTTPException(400, "缺少 key")
+    try:
+        if is_dir:
+            total = 0
+            options = {"Bucket": r2["bucket"], "Prefix": key, "MaxKeys": 1000}
+            while True:
+                resp = client.list_objects_v2(**options)
+                keys = [o["Key"] for o in resp.get("Contents", [])]
+                if keys:
+                    client.delete_objects(
+                        Bucket=r2["bucket"],
+                        Delete={"Objects": [{"Key": k} for k in keys]},
+                    )
+                    total += len(keys)
+                if resp.get("IsTruncated"):
+                    options["ContinuationToken"] = resp["NextContinuationToken"]
+                else:
+                    break
+            try:
+                client.delete_object(Bucket=r2["bucket"], Key=key.rstrip("/"))
+            except Exception:
+                pass
+            return {"ok": True, "deleted": total}
+        client.delete_object(Bucket=r2["bucket"], Key=key)
+        return {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"删除失败：{str(e)}")
+
+
+@app.post("/api/r2/batch-delete")
+async def r2_batch_delete(request: Request):
+    """批量删除文件或文件夹。"""
+    client, r2 = _r2_client()
+    if client is None:
+        raise HTTPException(400, "R2 未配置")
+    body = await request.json()
+    keys: list = body.get("keys", [])
+    if not keys:
+        raise HTTPException(400, "缺少 keys")
+    total = 0
+    errors = []
+    for key in keys:
+        try:
+            client.delete_object(Bucket=r2["bucket"], Key=key)
+            total += 1
+        except Exception:
+            try:
+                options = {"Bucket": r2["bucket"], "Prefix": key, "MaxKeys": 1000}
+                while True:
+                    resp = client.list_objects_v2(**options)
+                    obj_keys = [o["Key"] for o in resp.get("Contents", [])]
+                    if obj_keys:
+                        client.delete_objects(
+                            Bucket=r2["bucket"],
+                            Delete={"Objects": [{"Key": k} for k in obj_keys]},
+                        )
+                        total += len(obj_keys)
+                    if resp.get("IsTruncated"):
+                        options["ContinuationToken"] = resp["NextContinuationToken"]
+                    else:
+                        break
+                try:
+                    client.delete_object(Bucket=r2["bucket"], Key=key.rstrip("/"))
+                except Exception:
+                    pass
+            except Exception as e:
+                errors.append(f"{key}: {str(e)}")
+    return {"ok": True, "deleted": total, "errors": errors}
+
+
+@app.post("/api/r2/create-folder")
+async def r2_create_folder(request: Request):
+    """在 R2 中创建文件夹（空对象标记）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        raise HTTPException(400, "R2 未配置")
+    body = await request.json()
+    key = body.get("key", "")
+    if not key:
+        raise HTTPException(400, "缺少 key")
+    folder_key = key if key.endswith("/") else f"{key}/"
+    try:
+        client.put_object(Bucket=r2["bucket"], Key=folder_key, Body=b"")
+        return {"ok": True, "key": folder_key}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"创建文件夹失败：{str(e)}")
+
+
+@app.post("/api/r2/upload")
+async def r2_upload(request: Request):
+    """上传文件到 R2（base64 编码）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        raise HTTPException(400, "R2 未配置")
+    body = await request.json()
+    filename = body.get("filename", "")
+    content = body.get("content", "")
+    content_type = body.get("contentType", "")
+    prefix = body.get("prefix", "")
+    if not filename or not content:
+        raise HTTPException(400, "缺少 filename 或 content")
+    try:
+        import base64 as b64
+        decoded = b64.b64decode(content)
+        import re
+        safe_name = re.sub(r'[^\w.\-]', '_', filename)
+        key = f"{prefix.rstrip('/')}/{safe_name}" if prefix else safe_name
+        client.put_object(
+            Bucket=r2["bucket"],
+            Key=key,
+            Body=decoded,
+            ContentType=content_type or "application/octet-stream",
+        )
+        return {"ok": True, "key": key, "size": len(decoded), "filename": filename}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"上传失败：{str(e)}")
+
+
+@app.get("/api/r2/stats")
+def r2_stats(prefix: str = ""):
+    """获取 R2 存储统计。"""
+    client, r2 = _r2_client()
+    if client is None:
+        return {"ok": False, "error": "R2 未配置"}
+    try:
+        total_size = 0
+        total_files = 0
+        options = {"Bucket": r2["bucket"], "Prefix": prefix, "MaxKeys": 1000}
+        while True:
+            resp = client.list_objects_v2(**options)
+            for obj in resp.get("Contents", []):
+                total_size += obj["Size"]
+                total_files += 1
+            if resp.get("IsTruncated"):
+                options["ContinuationToken"] = resp["NextContinuationToken"]
+            else:
+                break
+        return {
+            "ok": True,
+            "totalSize": total_size,
+            "totalFiles": total_files,
+            "totalSizeMB": f"{total_size / 1024 / 1024:.2f}",
+            "prefix": prefix,
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/r2/download")
+def r2_download(key: str):
+    """下载文件（带 Content-Disposition）。"""
+    client, r2 = _r2_client()
+    if client is None:
+        raise HTTPException(400, "R2 未配置")
+    try:
+        from fastapi.responses import StreamingResponse
         import io
         obj = client.get_object(Bucket=r2["bucket"], Key=key)
         body = obj["Body"].read()
-        return JSONResponse(
-            content=base64.b64encode(body).decode("ascii"),
-            headers={
-                "Content-Type": obj.get("ContentType", "application/octet-stream"),
-                "X-File-Size": str(len(body)),
-            },
+        filename = key.split("/")[-1]
+        content_type = obj.get("ContentType", "application/octet-stream")
+        return StreamingResponse(
+            io.BytesIO(body),
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(404, f"文件不存在：{str(e)}")
+
+
+@app.post("/api/bilibili/upload")
+async def bilibili_upload(request: Request):
+    """云端触发 B站上传（仅上传模式，从 R2 下载已有产物上传）。
+
+    通过 GitHub repository_dispatch 触发 workflow 的 upload_only 模式。
+    """
+    body = await request.json()
+    date = body.get("date", "")
+
+    # 获取 GitHub 配置
+    from common import load_config
+    cfg = load_config()
+    gh = cfg.get("github", {})
+    owner = gh.get("owner", "")
+    repo = gh.get("repo", "")
+    pat = gh.get("pat", "")
+
+    if not pat:
+        return {"ok": False, "error": "未配置 GitHub PAT，请在设置中填写"}
+    if not owner or not repo:
+        return {"ok": False, "error": "未配置 GitHub 仓库"}
+
+    payload = {
+        "event_type": "ashare-tucao-generation",
+        "client_payload": {
+            "date": date,
+            "upload": "true",
+            "upload_only": "true",
+        },
+    }
+
+    import urllib.request
+    url = f"https://api.github.com/repos/{owner}/{repo}/dispatches"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", f"Bearer {pat}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "ashare-tucao-remotion-server")
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            if resp.status == 204:
+                return {"ok": True, "message": "B站上传任务已触发，请查看运行状态"}
+            err_text = resp.read().decode("utf-8", errors="replace")
+            return {"ok": False, "error": f"触发失败：{resp.status} {err_text[:300]}"}
+    except urllib.error.HTTPError as e:
+        err_text = e.read().decode("utf-8", errors="replace")
+        return {"ok": False, "error": f"触发失败：{e.code} {err_text[:300]}"}
+    except Exception as e:
+        return {"ok": False, "error": f"触发失败：{str(e)}"}
 
 
 # ── 静态资源 ────────────────────────────────────────────────────────────
