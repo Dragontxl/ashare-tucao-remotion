@@ -44,12 +44,24 @@ const STOCK_RULES = (cfg.stocks || []).map((s: any) => ({
 
 function matchChart(item: Item): string | null {
   if (item.chart && CHART_FILES.includes(item.chart)) return item.chart;
-  // 只有带核心数字（big）的 data 场景才配图表，避免左侧留白
-  if (item.visual !== "data" || !item.big) return null;
   const hay = `${item.label || ""} ${item.big || ""} ${item.text || ""}`;
+
+  // 优先匹配个股图表（适用于 data / text 等所有场景类型）
+  // text 场景如「生益科技、金安国纪全封板」会命中个股分时+K线合并图
   for (const r of STOCK_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
-  for (const r of CHART_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
-  return "charts/breadth.png";
+
+  // data 场景且带 big：匹配通用图表规则，兜底 breadth
+  if (item.visual === "data" && item.big) {
+    for (const r of CHART_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
+    return "charts/breadth.png";
+  }
+
+  // text 场景：尝试匹配通用图表规则（如提到涨停/板块/情绪等）
+  if (item.visual === "text") {
+    for (const r of CHART_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
+  }
+
+  return null;
 }
 
 function bigFontSize(s = "") {

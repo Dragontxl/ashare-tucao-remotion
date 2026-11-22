@@ -24,6 +24,7 @@ from common import (ROOT, INPUT_DIR, CONFIG_DIR, SCRIPTS, date8, date8_from,
 STEP_SCRIPTS = {
     1: "generate_script.py",
     2: "build_audio.py",
+    2.5: "extract_stocks.py",   # 从时间轴提取股票名，补入 config.stocks（须在抓取行情前）
     3: "fetch_market_data.py",
     3.5: "make_charts.py",
     5: "generate_meta.py",   # 先生成 cover.json / 简介 / 标签（渲染依赖 cover.json）
@@ -32,6 +33,7 @@ STEP_SCRIPTS = {
 STEP_NAMES = {
     1: "生成毒舌文稿",
     2: "配音与时间轴",
+    2.5: "提取股票名称",
     3: "抓取真实行情",
     3.5: "生成图表",
     5: "生成简介与标签",
@@ -50,7 +52,7 @@ def parse_steps(value):
         num = float(x)
         num = int(num) if num.is_integer() else num
         if num not in STEP_SCRIPTS:
-            raise ValueError(f"未知步骤：{x}（可选 1,2,3,3.5,4,5）")
+            raise ValueError(f"未知步骤：{x}（可选 1,2,2.5,3,3.5,4,5）")
         steps.append(num)
     return steps
 
