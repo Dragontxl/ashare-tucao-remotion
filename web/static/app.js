@@ -685,7 +685,11 @@ function fmtDateTime(ts) {
 async function loadCloudTasks(silent = false) {
   try {
     const r = await api('/api/github/runs');
-    state.tasks = (r.runs || []).map((run) => ({
+    // 安全过滤：只保留视频生成工作流
+    const GEN_WORKFLOW = '生成A股吐槽视频';
+    state.tasks = (r.runs || [])
+      .filter((run) => run.name === GEN_WORKFLOW)
+      .map((run) => ({
       id: 'gh-' + run.id,
       cloud: true,
       run_id: run.id,

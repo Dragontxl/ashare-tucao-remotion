@@ -1047,8 +1047,12 @@ def github_runs(per_page: int = 20):
         req = urllib.request.Request(runs_url, headers=headers)
         resp = urllib.request.urlopen(req, timeout=15)
         data = json.loads(resp.read())
+        # 只保留视频生成工作流，过滤掉部署等其他工作流
+        GEN_WORKFLOW = "生成A股吐槽视频"
         runs = []
         for r in data.get("workflow_runs", []):
+            if r.get("name") != GEN_WORKFLOW:
+                continue
             runs.append({
                 "id": r["id"],
                 "name": r.get("name", ""),

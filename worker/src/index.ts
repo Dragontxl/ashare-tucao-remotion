@@ -313,7 +313,11 @@ app.get('/api/github/runs', async (c) => {
       return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
     }
     const data = await resp.json() as any;
-    const runs = (data?.workflow_runs || []).map((r: any) => ({
+    // 只保留视频生成工作流，过滤掉部署等其他工作流
+    const GEN_WORKFLOW = '生成A股吐槽视频';
+    const runs = (data?.workflow_runs || [])
+      .filter((r: any) => r.name === GEN_WORKFLOW)
+      .map((r: any) => ({
       id: r.id,
       name: r.name,
       event: r.event,
