@@ -1108,6 +1108,8 @@ async function cloudUploadBiliFromDetail() {
     });
     toast(resp.message || 'B站上传任务已触发');
     state.cloudUploading = false;
+    btn.disabled = false;
+    btn.textContent = '上传B站';
     // 跳回运行记录，直接看到新触发的上传工作流
     showView('tasks');
     loadCloudTasks(true);
