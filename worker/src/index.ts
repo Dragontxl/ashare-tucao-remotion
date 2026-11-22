@@ -319,10 +319,10 @@ app.get('/api/github/runs', async (c) => {
       return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
     }
     const data = await resp.json() as any;
-    // 只保留视频生成工作流，过滤掉部署等其他工作流
-    const GEN_WORKFLOW = '生成A股吐槽视频';
+    // 只保留视频生成 / 上传工作流，过滤掉部署等其他工作流
+    const SHOWN_WORKFLOWS = ['生成A股吐槽视频', '上传B站'];
     const runs = (data?.workflow_runs || [])
-      .filter((r: any) => r.name === GEN_WORKFLOW)
+      .filter((r: any) => SHOWN_WORKFLOWS.includes(r.name))
       .map((r: any) => ({
       id: r.id,
       name: r.name,
@@ -726,7 +726,7 @@ app.get('/api/r2/download', async (c) => {
   }
 });
 
-// ─── B站上传（云端：触发 GitHub Actions 仅上传模式）────────────────
+// ─── B站上传（云端：触发独立的「上传B站」工作流）────────────────
 
 app.post('/api/bilibili/upload', async (c) => {
   const pat = c.env.GITHUB_PAT;
@@ -736,12 +736,11 @@ app.post('/api/bilibili/upload', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const date = body.date || '';
 
+  // 触发独立的「上传B站」工作流（ashare-tucao-upload），而非视频生成工作流
   const payload = {
-    event_type: 'ashare-tucao-generation',
+    event_type: 'ashare-tucao-upload',
     client_payload: {
       date,
-      upload: 'true',
-      upload_only: 'true',
     },
   };
 

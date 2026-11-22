@@ -704,10 +704,10 @@ function fmtDateTime(ts) {
 async function loadCloudTasks(silent = false) {
   try {
     const r = await api('/api/github/runs');
-    // 安全过滤：只保留视频生成工作流
-    const GEN_WORKFLOW = '生成A股吐槽视频';
+    // 安全过滤：只保留视频生成 / 上传工作流，过滤掉部署等其他工作流
+    const SHOWN_WORKFLOWS = ['生成A股吐槽视频', '上传B站'];
     state.tasks = (r.runs || [])
-      .filter((run) => run.name === GEN_WORKFLOW)
+      .filter((run) => SHOWN_WORKFLOWS.includes(run.name))
       .map((run) => ({
       id: 'gh-' + run.id,
       cloud: true,
@@ -1089,7 +1089,7 @@ async function renderCloudMedia(run) {
   }
 }
 
-/** 从云端运行详情触发 B站上传（upload_only 模式） */
+/** 从云端运行详情触发 B站上传（独立的「上传B站」工作流） */
 async function cloudUploadBiliFromDetail() {
   const btn = $('#uploadBtn');
   if (!state.taskId) return;

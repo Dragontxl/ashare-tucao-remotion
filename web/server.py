@@ -1063,11 +1063,11 @@ def github_runs(per_page: int = 20):
         req = urllib.request.Request(runs_url, headers=headers)
         resp = urllib.request.urlopen(req, timeout=15)
         data = json.loads(resp.read())
-        # 只保留视频生成工作流，过滤掉部署等其他工作流
-        GEN_WORKFLOW = "生成A股吐槽视频"
+        # 只保留视频生成 / 上传工作流，过滤掉部署等其他工作流
+        SHOWN_WORKFLOWS = {"生成A股吐槽视频", "上传B站"}
         runs = []
         for r in data.get("workflow_runs", []):
-            if r.get("name") != GEN_WORKFLOW:
+            if r.get("name") not in SHOWN_WORKFLOWS:
                 continue
             runs.append({
                 "id": r["id"],
@@ -1452,9 +1452,9 @@ def r2_download(key: str):
 
 @app.post("/api/bilibili/upload")
 async def bilibili_upload(request: Request):
-    """云端触发 B站上传（仅上传模式，从 R2 下载已有产物上传）。
+    """云端触发 B站上传。
 
-    通过 GitHub repository_dispatch 触发 workflow 的 upload_only 模式。
+    通过 GitHub repository_dispatch 触发独立的「上传B站」工作流。
     """
     body = await request.json()
     date = body.get("date", "")
@@ -1473,11 +1473,9 @@ async def bilibili_upload(request: Request):
         return {"ok": False, "error": "未配置 GitHub 仓库"}
 
     payload = {
-        "event_type": "ashare-tucao-generation",
+        "event_type": "ashare-tucao-upload",
         "client_payload": {
             "date": date,
-            "upload": "true",
-            "upload_only": "true",
         },
     }
 
