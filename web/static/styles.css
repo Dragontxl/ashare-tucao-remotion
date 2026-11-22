@@ -241,21 +241,64 @@ option { background: var(--bg2); }
 /* ── 任务列表 ─────────────────────────────────────────── */
 .task-list { display: flex; flex-direction: column; gap: 12px; }
 .task-item {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 16px;
-  align-items: center;
   background: linear-gradient(180deg, rgba(20, 32, 58, 0.8), rgba(14, 22, 40, 0.85));
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 18px 22px;
   cursor: pointer;
-  transition: border-color 0.15s, transform 0.12s;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.12s;
 }
-.task-item:hover { border-color: rgba(255, 90, 110, 0.45); transform: translateY(-1px); }
-.task-item h3 { margin: 0 0 7px; font-size: 16px; font-weight: 600; }
-.task-meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
-.task-actions { display: flex; gap: 8px; align-items: center; }
+.task-item:hover {
+  border-color: rgba(255, 90, 110, 0.45);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
+}
+.task-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.task-item-header h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.task-meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--dim); margin-bottom: 10px; }
+.meta-error { color: var(--red); }
+.task-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.mini-progress-bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.mini-progress-fill { height: 100%; background: var(--red); border-radius: 3px; transition: width 0.3s; }
+.progress-text { font-size: 12px; color: var(--dim); min-width: 36px; text-align: right; }
+.task-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 状态徽章 */
+.status-badge {
+  padding: 3px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-badge.badge-ok { background: rgba(37, 224, 138, 0.12); color: var(--green); }
+.status-badge.badge-run { background: rgba(121, 180, 255, 0.12); color: var(--blue); }
+.status-badge.badge-err { background: rgba(255, 77, 94, 0.12); color: var(--red); }
+.status-badge.badge-muted { background: rgba(143, 164, 204, 0.12); color: var(--muted); }
+
+/* 筛选 tabs */
+.filter-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.filter-tab {
+  padding: 6px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.filter-tab:hover { border-color: rgba(255, 90, 110, 0.45); color: var(--text); }
+.filter-tab.active {
+  background: rgba(255, 77, 94, 0.12);
+  border-color: rgba(255, 77, 94, 0.45);
+  color: var(--red);
+}
 
 .progress-wrap { display: flex; flex-direction: column; gap: 10px; }
 .progress {
@@ -596,6 +639,6 @@ option { background: var(--bg2); }
   .container, .tabs { padding-left: 16px; padding-right: 16px; }
   .topbar { padding: 16px; }
   .card { padding: 18px; }
-  .task-item { grid-template-columns: 1fr; }
+  .task-item { padding: 14px 16px; }
   .log { height: 320px; }
 }

@@ -7,6 +7,7 @@ const state = {
   health: null,
   cloudMode: false,
   tasks: [],
+  taskFilter: '',
   taskId: null,
   task: null,
   logOffset: 0,
@@ -666,42 +667,67 @@ function renderTasks() {
   const list = $('#taskList');
   const empty = $('#taskEmpty');
   list.innerHTML = '';
-  empty.hidden = state.tasks.length > 0;
-  for (const t of state.tasks) {
+
+  // 状态筛选
+  const filter = state.taskFilter;
+  const filtered = filter
+    ? state.tasks.filter((t) => {
+        if (filter === 'running') return t.status === 'running' || t.status === 'queued';
+        return t.status === filter;
+      })
+    : state.tasks;
+
+  empty.hidden = filtered.length > 0;
+  for (const t of filtered) {
     const div = document.createElement('div');
     div.className = 'task-item';
     const prog = t.progress || {};
     const pct = prog.total ? Math.round((prog.current / prog.total) * 100) : (t.status === 'success' ? 100 : 0);
+    const statusText = t.status_label || t.status;
+    const isActive = t.status === 'running' || t.status === 'queued';
+    const isFailed = t.status === 'failed';
+
     div.innerHTML = `
-      <div>
-        <h3>${escapeHtml(t.title)}</h3>
-        <div class="task-meta">
-          <span>${fmtDate8(t.date8)}</span>
-          <span>${escapeHtml(t.status_label || t.status)}</span>
-          <span>${escapeHtml(t.step || '')}</span>
-          <span>${escapeHtml(fmtTime(t.created_at))}</span>
-          ${t.bvid ? `<span>BV：${escapeHtml(t.bvid)}</span>` : ''}
+      <div class="task-item-header">
+        <h3>${escapeHtml(t.title || '未命名任务')}</h3>
+        <span class="status-badge ${badgeClass(t.status)}">${escapeHtml(statusText)}</span>
+      </div>
+      <div class="task-meta">
+        <span>📅 ${fmtDate8(t.date8)}</span>
+        ${t.step ? `<span>📍 ${escapeHtml(t.step)}</span>` : ''}
+        <span>🕐 ${escapeHtml(fmtTime(t.created_at))}</span>
+        ${t.bvid ? `<span>BV：${escapeHtml(t.bvid)}</span>` : ''}
+        ${t.error ? `<span class="meta-error">⚠ ${escapeHtml(t.error)}</span>` : ''}
+      </div>
+      <div class="task-progress">
+        <div class="mini-progress-bar">
+          <div class="mini-progress-fill" style="width:${pct}%"></div>
         </div>
-        <div class="progress" style="margin-top:10px">
-          <div class="progress-bar" style="width:${pct}%"></div>
-        </div>
+        <span class="progress-text">${pct}%</span>
       </div>
       <div class="task-actions">
-        <span class="badge ${badgeClass(t.status)}">${escapeHtml(t.status_label || t.status)}</span>
-        <button class="btn btn-ghost btn-sm" data-action="open">查看</button>
-        ${t.status === 'running' || t.status === 'queued'
-          ? '<button class="btn btn-danger btn-sm" data-action="cancel">取消</button>' : ''}
-        ${t.status !== 'running' && t.status !== 'queued'
-          ? '<button class="btn btn-ghost btn-sm" data-action="delete">删除</button>' : ''}
+        ${isFailed ? '<button class="btn btn-secondary btn-sm" data-action="retry">重试</button>' : ''}
+        ${isActive ? '<button class="btn btn-danger btn-sm" data-action="cancel">取消</button>' : ''}
+        <button class="btn btn-ghost btn-sm" data-action="delete">删除</button>
       </div>`;
     div.addEventListener('click', (ev) => {
       const action = ev.target.dataset.action;
+      if (action === 'retry') { ev.stopPropagation(); retryTask(t.id); return; }
       if (action === 'cancel') { ev.stopPropagation(); cancelTask(t.id); return; }
       if (action === 'delete') { ev.stopPropagation(); deleteTask(t.id); return; }
       openDetail(t.id);
     });
     list.appendChild(div);
   }
+}
+
+async function retryTask(id) {
+  try {
+    await api(`/api/tasks/${id}/retry`, { method: 'POST' });
+    toast('任务已重新加入队列');
+    loadTasks(true);
+    if (state.taskId === id) refreshDetail();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function cancelTask(id) {
@@ -1344,6 +1370,14 @@ async function init() {
     await checkTrading(inputToDate8($('#taskDate').value) || (state.health && state.health.date8));
   });
   $('#refreshTasksBtn').addEventListener('click', () => loadTasks());
+  $$('#taskFilters .filter-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      $$('#taskFilters .filter-tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      state.taskFilter = tab.dataset.filter;
+      renderTasks();
+    });
+  });
   $('#backBtn').addEventListener('click', () => showView('tasks'));
   $('#cancelBtn').addEventListener('click', () => state.taskId && cancelTask(state.taskId));
   $('#uploadBtn').addEventListener('click', manualUpload);

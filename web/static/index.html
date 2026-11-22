@@ -156,6 +156,12 @@
         <h2>任务列表</h2>
         <button class="btn btn-ghost btn-sm" id="refreshTasksBtn">刷新</button>
       </div>
+      <div class="filter-tabs" id="taskFilters">
+        <button class="filter-tab active" data-filter="">全部</button>
+        <button class="filter-tab" data-filter="running">进行中</button>
+        <button class="filter-tab" data-filter="success">已完成</button>
+        <button class="filter-tab" data-filter="failed">失败</button>
+      </div>
       <div id="taskList" class="task-list"></div>
       <p class="empty" id="taskEmpty">还没有任务，先去「新建任务」吧。</p>
     </section>

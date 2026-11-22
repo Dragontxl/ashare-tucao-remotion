@@ -522,6 +522,22 @@ def delete_task(task_id: str):
     return {"ok": True}
 
 
+@app.post("/api/tasks/{task_id}/retry")
+def retry_task(task_id: str):
+    t = get_task(task_id)
+    if not t:
+        raise HTTPException(404, "任务不存在")
+    status = t.get("status")
+    if status not in ("failed", "cancelled", "skipped"):
+        raise HTTPException(400, f"当前状态（{status}）不可重试，仅失败/取消/跳过的任务可重试")
+    update_task(task_id, status="queued", step="排队中",
+                progress={"current": 0, "total": 0}, error="",
+                started_at=None, finished_at=None)
+    append_log(task_id, "\n[web] 用户重试任务。\n")
+    _task_queue.put(task_id)
+    return public_task(get_task(task_id))
+
+
 @app.post("/api/articles/upload")
 async def upload_article(request: Request):
     """前端以 JSON + base64 上传原文（避免 multipart 依赖）。"""
