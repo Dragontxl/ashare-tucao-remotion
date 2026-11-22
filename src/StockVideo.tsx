@@ -148,12 +148,83 @@ function useEnter(item: Item, delay = 0) {
   return { s, out, rel };
 }
 
+// 伪随机：同一个镜头每次渲染结果一致（Remotion 必须可复现）
+function seededRand(seed: number) {
+  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+type ImgMotion = {
+  transform: string;
+  opacity: number;
+  filter?: string;
+  clipPath?: string;
+  transformOrigin?: string;
+};
+
+// 图片入场动画：8 种风格，按镜头 id 稳定随机
+function imgEntrance(kind: number, rel: number, fps: number): ImgMotion {
+  const s = spring({ frame: rel, fps, config: { damping: 15, mass: 0.75, stiffness: 110 } });
+  const p = interpolate(rel, [0, 16], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const d = 1 - s;
+  switch (kind % 8) {
+    case 0: // 右侧 3D 翻转入场
+      return {
+        opacity: p, transformOrigin: "left center",
+        transform: `perspective(1600px) rotateY(${d * 74}deg) translateX(${d * 140}px)`,
+      };
+    case 1: // 冲击缩放 + 去模糊
+      return {
+        opacity: p, filter: `blur(${d * 16}px)`,
+        transform: `scale(${1.26 - 0.26 * s})`,
+      };
+    case 2: // 底部上浮 + 轻微回正
+      return {
+        opacity: p, transformOrigin: "center bottom",
+        transform: `translateY(${d * 240}px) rotate(${d * -7}deg) scale(${0.92 + 0.08 * s})`,
+      };
+    case 3: // 从左到右擦除揭示
+      return {
+        opacity: 1, clipPath: `inset(0 ${(1 - p) * 100}% 0 0)`,
+        transform: `scale(${0.96 + 0.04 * s})`,
+      };
+    case 4: // 摆锤式甩入
+      return {
+        opacity: p, transformOrigin: "top center",
+        transform: `rotate(${d * -14}deg) scale(${0.88 + 0.12 * s})`,
+      };
+    case 5: { // 故障闪烁 + 横向抖动
+      const flick = rel < 14 ? (Math.sin(rel * 3.7) > 0 ? 1 : 0.35) : 1;
+      return {
+        opacity: p * flick,
+        transform: `translateX(${d * Math.sin(rel * 2.3) * 26}px) scale(${0.94 + 0.06 * s})`,
+      };
+    }
+    case 6: // 仰角翻起（rotateX）
+      return {
+        opacity: p, transformOrigin: "center bottom",
+        transform: `perspective(1200px) rotateX(${d * 58}deg) translateY(${d * 90}px)`,
+      };
+    default: // 斜向旋冲
+      return {
+        opacity: p, filter: `blur(${d * 6}px)`,
+        transform: `translate(${d * 130}px, ${d * 90}px) rotate(${d * 10}deg) scale(${0.82 + 0.18 * s})`,
+      };
+  }
+}
+
 function ChartScene({ item, chart }: { item: Item; chart: string }) {
   const { s, out, rel } = useEnter(item);
+  const { fps } = useVideoConfig();
   const c = TONE[item.tone];
   const big = item.big ?? "";
-  const imgSlide = interpolate(rel, [0, 18], [70, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const isReal = chart.includes("stock_") || chart.includes("timeline") || chart.includes("kline");
+  // 每个镜头稳定随机一种入场动画
+  const kind = Math.floor(seededRand(item.id * 3.7 + 1.3) * 8);
+  const motion = imgEntrance(kind, rel, fps);
+  // 入场后卡片轻微漂浮，增加画面呼吸感
+  const float = Math.sin(rel * 0.06) * 5;
+  // 一道扫光掠过图表
+  const sweepX = interpolate(rel, [6, 24], [-45, 145], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   return (
     <AbsoluteFill style={{ flexDirection: "row", alignItems: "center", padding: "0 90px", gap: 60, opacity: out }}>
       <div style={{ width: 700, flexShrink: 0,
@@ -167,17 +238,25 @@ function ChartScene({ item, chart }: { item: Item; chart: string }) {
         <div style={{ marginTop: 30, fontSize: 26, color: "#8fa4cc", lineHeight: 1.5, letterSpacing: 1 }}>
           {item.text}
         </div>
-        <div style={{ marginTop: 30, display: "inline-block", padding: "10px 22px",
-          border: `1px solid ${c.main}66`, borderRadius: 999, fontSize: 20, color: c.main, letterSpacing: 3 }}>
-          📊 {isReal ? "真实行情 · 腾讯财经接口" : "复盘数据 · 据原文整理"}
-        </div>
       </div>
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-        transform: `translateX(${imgSlide}px)` }}>
-        <div style={{ position: "relative", padding: 22, background: "rgba(12,18,38,0.86)",
-          border: "2px solid rgba(140,170,230,0.28)", borderRadius: 24,
-          boxShadow: "0 24px 80px rgba(0,0,0,0.55)" }}>
-          <Img src={staticFile(chart)} style={{ width: 980, height: 690, objectFit: "contain", borderRadius: 12 }} />
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{
+          transform: motion.transform, opacity: motion.opacity, filter: motion.filter,
+          clipPath: motion.clipPath, transformOrigin: motion.transformOrigin,
+          willChange: "transform, opacity, filter",
+        }}>
+          <div style={{ position: "relative", padding: 22, background: "rgba(12,18,38,0.86)",
+            border: "2px solid rgba(140,170,230,0.28)", borderRadius: 24,
+            boxShadow: `0 24px 80px rgba(0,0,0,0.55), 0 0 60px ${c.glow}`,
+            transform: `translateY(${float}px)` }}>
+            <Img src={staticFile(chart)} style={{ width: 980, height: 690, objectFit: "contain", borderRadius: 12 }} />
+            {/* 扫光 */}
+            <div style={{ position: "absolute", inset: 0, borderRadius: 24, overflow: "hidden", pointerEvents: "none" }}>
+              <div style={{ position: "absolute", top: "-12%", bottom: "-12%", width: "30%", left: `${sweepX}%`,
+                background: "linear-gradient(90deg, transparent, rgba(180,210,255,0.28), transparent)",
+                transform: "skewX(-18deg)" }} />
+            </div>
+          </div>
         </div>
       </div>
     </AbsoluteFill>

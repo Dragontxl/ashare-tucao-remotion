@@ -45,7 +45,8 @@ TEXT = "#eef3ff"; MUTED = "#9fb2d8"; GRID = "#2a3552"; ACCENT = "#ffb02e"
 META = load_json(os.path.join(MARKET_DATA, "meta.json"), {})
 DATE = META.get("trade_date", "")
 DATE_LABEL = f"{DATE[5:7]}月{DATE[8:10]}日" if DATE and len(DATE) >= 10 else cfg.get("date_label", "")
-NOTE = f"数据来源：腾讯财经免费接口 · {DATE} 真实行情" if DATE else "数据来源：腾讯财经免费接口 · 真实行情"
+# 图表页脚只保留日期，不再标注数据来源
+NOTE = DATE_LABEL
 
 
 def load(name):
@@ -118,7 +119,7 @@ def plot_index_timeline():
         ax.set_xticks(ticks); ax.set_xticklabels([times[i] for i in ticks], fontproperties=fp)
     ax.set_xlim(0, len(prices) - 1)
     ax.set_ylabel("指数点位", color=MUTED, fontsize=14, fontproperties=fp)
-    title(ax, f"{cfg.get('index_name','上证指数')} · {DATE_LABEL}分时走势（真实数据）")
+    title(ax, f"{cfg.get('index_name','上证指数')} · {DATE_LABEL}分时走势")
     note(fig); finish(fig, "timeline.png")
 
 
@@ -146,12 +147,12 @@ def plot_index_kline():
                 xy=(li, last["low"]), xytext=(li - 6, last["low"] - 28),
                 color=ACCENT, fontsize=13, fontweight="bold", fontproperties=fp,
                 arrowprops=dict(arrowstyle="->", color=ACCENT, lw=1.5))
-    title(ax, f"{cfg.get('index_name','上证指数')} · 近20日日K线（真实数据）")
+    title(ax, f"{cfg.get('index_name','上证指数')} · 近20日日K线")
     ax.set_ylabel("点位", color=MUTED, fontsize=13, fontproperties=fp)
     ax2.set_ylabel("成交量(亿手)", color=MUTED, fontsize=12, fontproperties=fp)
     ax2.set_xticks(xs[::3])
     ax2.set_xticklabels([r["date"][5:] for r in rows][::3], rotation=40, ha="right", fontproperties=fp)
-    note(fig, "数据来源：腾讯财经免费接口 · 真实行情"); finish(fig, "kline.png")
+    note(fig); finish(fig, "kline.png")
 
 
 def plot_stock(s):
@@ -188,7 +189,7 @@ def plot_stock(s):
     ax2.set_title(f"{name} 近15日日K", color=TEXT, fontsize=17, fontweight="bold", fontproperties=fp)
     ax2.set_xticks(kx[::3])
     ax2.set_xticklabels([r["date"][5:] for r in rows][::3], rotation=40, ha="right", fontproperties=fp)
-    note(fig, f"数据来源：腾讯财经免费接口 · 真实行情 {s.get('label','')}")
+    note(fig)
     finish(fig, fname)
     log(f"  {name} {chg:+.2f}%")
 
@@ -215,26 +216,25 @@ def plot_summary():
     # 全球市场：优先用 config.summary.global_market
     gm = SUMMARY.get("global_market")
     if gm:
-        bar_chart("global.png", "全球市场表现对比（复盘记录）",
-                  [(x["label"], float(x["value"])) for x in gm],
-                  "数据来源：据复盘记录整理")
+        bar_chart("global.png", "全球市场表现对比",
+                  [(x["label"], float(x["value"])) for x in gm], "")
     else:
         # 用真实指数涨跌兜底
         k = load(f"{INDEX}_kline.json")
         if k and len(k["kline"]) >= 2:
             r0, r1 = k["kline"][-2], k["kline"][-1]
             chg = (r1["close"] / r0["close"] - 1) * 100
-            bar_chart("global.png", f"{cfg.get('index_name','上证指数')}最新涨跌（真实数据）",
+            bar_chart("global.png", f"{cfg.get('index_name','上证指数')}最新涨跌",
                       [(cfg.get("index_name", "上证指数"), chg)])
 
     # 贵金属：config.summary.precious_metal
     pm = SUMMARY.get("precious_metal")
     if pm:
-        bar_chart("gold.png", "贵金属市场表现（复盘记录）",
-                  [(x["label"], float(x["value"])) for x in pm], "数据来源：据复盘记录整理")
+        bar_chart("gold.png", "贵金属市场表现",
+                  [(x["label"], float(x["value"])) for x in pm], "")
     else:
-        bar_chart("gold.png", "贵金属观察（复盘记录）",
-                  [("沪金主力", -6.0), ("沪银主力", -9.0)], "数据来源：据复盘记录整理")
+        bar_chart("gold.png", "贵金属观察",
+                  [("沪金主力", -6.0), ("沪银主力", -9.0)], "")
 
     # 板块分化：用真实个股涨跌
     items = []
@@ -245,7 +245,7 @@ def plot_summary():
             items.append((s["name"], chg))
     if not items:
         items = [("工商银行", 3.0), ("科创50", -3.0)]
-    bar_chart("sectors.png", "个股/板块涨跌分化（真实数据）", items)
+    bar_chart("sectors.png", "个股/板块涨跌分化", items)
 
     # 市场情绪 breadth
     br = SUMMARY.get("breadth")
@@ -256,12 +256,12 @@ def plot_summary():
         for b, v in zip(bars, vals):
             ax.text(b.get_x() + b.get_width() / 2, v, f"{int(v)}", ha="center", va="bottom",
                     color=TEXT, fontsize=14, fontweight="bold", fontproperties=fp)
-        title(ax, "市场情绪概览（复盘记录）"); note(fig, "数据来源：据复盘记录整理")
+        title(ax, "市场情绪概览"); note(fig)
         finish(fig, "breadth.png")
     else:
-        bar_chart("breadth.png", "市场情绪概览（复盘记录）",
+        bar_chart("breadth.png", "市场情绪概览",
                   [("上涨", 297 / 48), ("下跌", 100), ("涨停", 30 / 4.8), ("跌停", 61 / 4.8)],
-                  "数据来源：据复盘记录整理（相对比例）")
+                  "")
 
 
 def main():
