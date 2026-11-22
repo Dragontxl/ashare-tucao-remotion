@@ -1043,6 +1043,16 @@ def r2_file(key: str):
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.get("/styles.css")
+def styles_css():
+    return FileResponse(os.path.join(STATIC_DIR, "styles.css"), media_type="text/css")
+
+
+@app.get("/app.js")
+def app_js():
+    return FileResponse(os.path.join(STATIC_DIR, "app.js"), media_type="application/javascript")
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))

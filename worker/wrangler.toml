@@ -1,0 +1,30 @@
+name = "ashare-tucao-remotion-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ─── 非敏感配置 ────────────────────────────────────────────
+# 敏感信息（GITHUB_PAT、AGNES_API_KEY 等）通过 `wrangler secret put` 管理
+
+[vars]
+ENVIRONMENT = "production"
+GITHUB_REPO_OWNER = "Dragontxl"
+GITHUB_REPO_NAME = "ashare-tucao-remotion"
+R2_PUBLIC_URL = "https://ashare-tucao-remotion-bucket.d30bed2763a23cf8eddf343ca192c5ff.r2.cloudflarestorage.com"
+R2_BUCKET_NAME = "ashare-tucao-remotion-bucket"
+
+# ─── R2 存储桶绑定 ────────────────────────────────────────
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "ashare-tucao-remotion-bucket"
+
+# ─── 静态资源托管（前端）──────────────────────────────────
+[assets]
+directory = "../web/static"
+not_found_handling = "single-page-application"
+
+# ─── 自定义域名 ──────────────────────────────────────────
+[[routes]]
+pattern = "ashare-remotion.ygtxl.dpdns.org"
+zone_name = "ygtxl.dpdns.org"
+custom_domain = true

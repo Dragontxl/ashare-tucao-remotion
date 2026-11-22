@@ -46,3 +46,6 @@ web/data/
 .DS_Store
 .env
 *.log
+
+# Wrangler 本地状态
+worker/.wrangler/
