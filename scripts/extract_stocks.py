@@ -46,10 +46,10 @@ STOP_WORDS = {
     "翻倍", "增倍", "同增", "同比",
     "集体", "集体发疯", "没人", "没人爱", "没人理",
     "可以", "别慌", "别去", "别碰", "注意", "小心",
-    "依然", "还是", "结果", "这时候", "这时候",
+    "依然", "还是", "结果", "这时候",
     "点赞关注", "下周一见", "不构成", "仅为",
     "内容", "行情", "走势", "后市", "市看",
-    "新高", "新低", "冲高", "探底", "回落",
+    "新高", "新低",
     "市场情绪", "板块涨停", "批量涨停",
     "严重", "明显", "急剧", "瞬间", "还在",
     "抢筹", "抢算力", "抢糖", "发糖",
@@ -57,6 +57,24 @@ STOP_WORDS = {
     "今天", "明天", "昨天", "后天",
     "看医", "看医药",
     "光伏银行",
+    # 常见数量/程度/时间/语气词
+    "万亿", "千亿", "百亿", "千万", "百万", "万别", "万亿成", "万亿成交",
+    "一路", "一路低走", "一路走高", "一路下行",
+    "一眼", "一课", "一撑", "一撑住", "一撑住场",
+    "上了", "下来", "上来", "起来", "下去", "出去", "进来",
+    "撑住", "撑场", "撑住场",
+    "全场", "全场", "场次",
+    "三联锻造",
+}
+
+# 常见后缀/前缀词——股票名不会以这些字开头或结尾
+INVALID_PREFIXES = {
+    "一", "两", "三", "几", "上", "下", "不", "没", "有", "是",
+    "在", "到", "对", "把", "被", "让", "给", "从", "向", "往",
+}
+INVALID_SUFFIXES = {
+    "了", "的", "是", "在", "有", "着", "过", "都", "也", "还",
+    "就", "才", "又", "再", "只", "更", "最", "太", "很",
 }
 
 # 中文字符范围（用于校验候选名）
@@ -101,11 +119,12 @@ def search_stock(name, cache=None):
 def extract_candidates(timeline_data):
     """从 timeline.json 的 items 中提取候选股票名。
 
-    策略：
+    策略（避免暴力子串导致候选爆炸）：
       1. 提取所有连续中文字符段
-      2. 长度 2-6 的整段直接作为候选
-      3. 长度 > 6 的段，额外提取所有 2-4 字子串（多数股票名 2-4 字）
-      4. 过滤停用词及停用词的子串（如"伟达"是停用词"英伟达"的子串）
+      2. 长度 2-6 的完整段直接作为候选（独立短语可能是股票名）
+      3. 长度 > 6 的长段，只提取前缀（3-6字）和后缀（3-6字）
+         ——股票名通常出现在短语的开头或结尾，不会散落在中间
+      4. 过滤停用词、停用词子串、非法前缀/后缀
     """
     candidates = set()
     items = timeline_data.get("items", [])
@@ -116,24 +135,31 @@ def extract_candidates(timeline_data):
         # 提取所有连续中文字符段
         runs = re.findall(r'[\u4e00-\u9fff]+', text)
         for run in runs:
-            if len(run) < 2:
+            n = len(run)
+            if n < 2:
                 continue
             candidates_for_run = []
-            if 2 <= len(run) <= 6:
+            if 2 <= n <= 6:
+                # 完整段直接作为候选
                 candidates_for_run.append(run)
-            if len(run) > 6:
-                # 长段：尝试所有 2-4 字子串
-                for start in range(len(run) - 1):
-                    for length in (2, 3, 4):
-                        sub = run[start:start + length]
-                        if len(sub) < 2:
-                            break
-                        candidates_for_run.append(sub)
+            elif n > 6:
+                # 长段：只提取前缀和后缀（3-6字）
+                for length in (3, 4, 5, 6):
+                    candidates_for_run.append(run[:length])
+                    candidates_for_run.append(run[-length:])
             for cand in candidates_for_run:
+                if not cand or len(cand) < 2:
+                    continue
                 if cand in STOP_WORDS:
                     continue
                 # 过滤停用词的子串（如"伟达"是"英伟达"的子串）
                 if any(cand in sw and cand != sw for sw in STOP_WORDS):
+                    continue
+                # 过滤以常见副词/介词开头的（不是股票名）
+                if cand[0] in INVALID_PREFIXES:
+                    continue
+                # 过滤以常见助词结尾的（不是股票名）
+                if cand[-1] in INVALID_SUFFIXES:
                     continue
                 candidates.add(cand)
     return candidates
