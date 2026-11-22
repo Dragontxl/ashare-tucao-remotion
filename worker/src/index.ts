@@ -445,7 +445,8 @@ app.get('/api/r2/files', async (c) => {
     } while (truncated && nextCursor && pages < maxPages);
 
     const folders = Array.from(folderSet).map((fp: string) => {
-      const name = fp.replace(/^\/|\/$/g, '');
+      // 只取最后一段作为显示名，避免把完整路径拼成一串
+      const name = fp.replace(/\/+$/, '').split('/').pop() || fp;
       return { key: fp, name, type: 'directory', size: 0, lastModified: null };
     });
     const files = objects.map((obj: any) => {

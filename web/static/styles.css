@@ -18,6 +18,9 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性必须优先于 display:flex/grid 等类样式 */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;

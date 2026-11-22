@@ -1137,9 +1137,8 @@ def r2_files(prefix: str = "", cursor: str = ""):
     if client is None:
         return {"ok": False, "error": "R2 未配置", "files": [], "folders": []}
     try:
-        options = {"Bucket": r2["bucket"], "Prefix": prefix, "MaxKeys": 1000}
-        if prefix:
-            options["Delimiter"] = "/"
+        # 始终使用 Delimiter，让 R2 按目录层级返回 CommonPrefixes（文件夹）
+        options = {"Bucket": r2["bucket"], "Prefix": prefix, "MaxKeys": 1000, "Delimiter": "/"}
         if cursor:
             options["ContinuationToken"] = cursor
 
@@ -1165,7 +1164,8 @@ def r2_files(prefix: str = "", cursor: str = ""):
 
         folders = []
         for fp in folder_set:
-            name = fp.replace("/", "")
+            # 只取最后一段作为显示名，避免把完整路径拼成一串
+            name = fp.rstrip("/").split("/")[-1]
             folders.append({"key": fp, "name": name, "type": "directory", "size": 0, "lastModified": None})
 
         files = []
