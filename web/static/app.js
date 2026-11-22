@@ -63,8 +63,30 @@ function fmtDate8(d) {
 }
 
 function fmtTime(ts) {
-  if (!ts) return '';
-  return ts.replace('T', ' ').slice(5, 16);
+  const p = bjParts(ts);
+  if (!p) return ts ? String(ts).replace('T', ' ').slice(5, 16) : '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(p.month)}-${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+// 解析时间：带时区（如 GitHub 的 ...Z）统一换算为北京时间 UTC+8；无时区（本地任务）原样按本地展示
+function bjParts(ts) {
+  if (!ts) return null;
+  const s = String(ts).trim();
+  const hasZone = /[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s);
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  if (hasZone) {
+    const bj = new Date(d.getTime() + 8 * 3600 * 1000);
+    return {
+      year: bj.getUTCFullYear(), month: bj.getUTCMonth() + 1, day: bj.getUTCDate(),
+      hour: bj.getUTCHours(), minute: bj.getUTCMinutes(), second: bj.getUTCSeconds(),
+    };
+  }
+  return {
+    year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(),
+    hour: d.getHours(), minute: d.getMinutes(), second: d.getSeconds(),
+  };
 }
 
 function escapeHtml(s) {
@@ -673,11 +695,10 @@ function cloudStatusLabel(run) {
 }
 
 function fmtDateTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return ts;
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const p = bjParts(ts);
+  if (!p) return ts || '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${p.year}-${pad(p.month)}-${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}`;
 }
 
 async function loadCloudTasks(silent = false) {
@@ -746,7 +767,7 @@ function renderTasks() {
         <span class="status-badge ${badgeClass(t.status)}">${escapeHtml(statusText)}</span>
       </div>
       <div class="task-meta">
-        ${isCloud ? `<span>📅 ${escapeHtml(t.created_at || '')}</span>` : `<span>📅 ${fmtDate8(t.date8)}</span>`}
+        ${isCloud ? `<span>🕐 ${escapeHtml(t.created_at || '')} · 北京时间</span>` : `<span>📅 ${fmtDate8(t.date8)}</span>`}
         ${t.step ? `<span>📍 ${escapeHtml(t.step)}</span>` : ''}
         ${t.created_at && !isCloud ? `<span>🕐 ${escapeHtml(fmtTime(t.created_at))}</span>` : ''}
         ${t.bvid ? `<span>BV：${escapeHtml(t.bvid)}</span>` : ''}
