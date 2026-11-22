@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Step 2a：从 timeline.json 中自动提取股票名称，补入 config.stocks。
 
-扫描分镜的 text 字段，提取连续中文片段作为候选股票名，
-用新浪搜索接口（suggest3.sinajs.cn）匹配股票代码，
+从新浪财经接口下载完整 A 股代码+名称列表，构建名称字典，
+扫描分镜的 text 字段提取候选名，在字典中精确匹配股票代码，
 将新发现的股票追加到 config.stocks（不覆盖已有配置）。
 
 这样后续 fetch_market_data.py 能抓取行情，make_charts.py 能生成个股图表，
@@ -11,6 +11,7 @@ StockVideo.tsx 的 matchChart 能将 text 场景中的股票名匹配到对应�
 用法：
   python scripts/extract_stocks.py          # 扫描并补入股票
   python scripts/extract_stocks.py --dry   # 只扫描不写入
+  python scripts/extract_stocks.py --refresh   # 强制重新下载股票列表
 """
 import argparse
 import os
@@ -22,9 +23,19 @@ import urllib.request
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import SRC, load_config, save_config, load_json, log
+from common import SRC, load_config, save_config, load_json, save_json, log
 
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+UA_LIST = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+]
+
+# 股票列表缓存文件
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+STOCK_LIST_FILE = os.path.join(DATA_DIR, "a_stock_list.json")
+STOCK_LIST_TTL = 7 * 24 * 3600  # 7 天有效
 
 # 停用词：这些词即使被拆分出来也不是股票名，直接过滤
 STOP_WORDS = {
@@ -57,14 +68,6 @@ STOP_WORDS = {
     "今天", "明天", "昨天", "后天",
     "看医", "看医药",
     "光伏银行",
-    # 常见数量/程度/时间/语气词
-    "万亿", "千亿", "百亿", "千万", "百万", "万别", "万亿成", "万亿成交",
-    "一路", "一路低走", "一路走高", "一路下行",
-    "一眼", "一课", "一撑", "一撑住", "一撑住场",
-    "上了", "下来", "上来", "起来", "下去", "出去", "进来",
-    "撑住", "撑场", "撑住场",
-    "全场", "全场", "场次",
-    "三联锻造",
 }
 
 # 常见后缀/前缀词——股票名不会以这些字开头或结尾
@@ -77,49 +80,105 @@ INVALID_SUFFIXES = {
     "就", "才", "又", "再", "只", "更", "最", "太", "很",
 }
 
-# 中文字符范围（用于校验候选名）
-CJK_RE = re.compile(r'^[\u4e00-\u9fff]+$')
+
+# ---------- 下载完整 A 股列表 ----------
+
+def _fetch_page(node, page, page_size=80):
+    """从新浪接口抓取一页股票数据。"""
+    params = urllib.parse.urlencode({
+        "page": str(page),
+        "num": str(page_size),
+        "sort": "symbol",
+        "asc": "1",
+        "node": node,
+    })
+    url = f"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?{params}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA_LIST[page % len(UA_LIST)],
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://finance.sina.com.cn/",
+        "Cache-Control": "no-cache",
+    })
+    raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", errors="ignore")
+    if not raw or raw.strip() in ("", "null"):
+        return []
+    return json.loads(raw)
 
 
-def search_stock(name, cache=None):
-    """用新浪搜索接口匹配股票代码。
+def download_stock_list():
+    """下载全部 A 股（上海 + 深圳）代码和名称，返回 [{code, name}, ...]。"""
+    all_stocks = []
+    seen = set()
+    for node, label in [("sh_a", "上海A股"), ("sz_a", "深圳A股")]:
+        log(f"下载{label}...")
+        page = 1
+        consecutive_fail = 0
+        max_pages = 80
+        while page <= max_pages:
+            try:
+                data = _fetch_page(node, page)
+            except Exception as e:
+                consecutive_fail += 1
+                if consecutive_fail >= 3:
+                    log(f"  {label} 第{page}页失败，停止（已获取{len(all_stocks)}只）")
+                    break
+                time.sleep(2 * consecutive_fail)
+                page += 1
+                continue
+            if not isinstance(data, list) or len(data) == 0:
+                log(f"  {label} 第{page}页：空，停止（已获取{len(all_stocks)}只）")
+                break
+            consecutive_fail = 0
+            for item in data:
+                symbol = item.get("symbol", "")
+                name = item.get("name", "")
+                if symbol and name:
+                    code = symbol  # 保留 sh/sz 前缀，如 sh600000
+                    if code not in seen:
+                        seen.add(code)
+                        all_stocks.append({"code": code, "name": name})
+            if len(data) < 80:
+                log(f"  {label} 完成，共{len(data)}条")
+                break
+            if page % 10 == 0:
+                log(f"  {label} 第{page}页，累计{len(all_stocks)}只")
+            time.sleep(0.3 + page % 3 * 0.1)
+            page += 1
+        if node == "sh_a":
+            time.sleep(3)  # 两个节点之间间隔，避免反爬
+    log(f"股票列表下载完成：共 {len(all_stocks)} 只")
+    return all_stocks
 
-    返回 (code, std_name) 或 None。
-    code 格式：sh600000 / sz000001 等。
-    """
-    if cache is not None and name in cache:
-        return cache[name]
-    # type=11 返回股票/基金等，格式：var suggestvalue="名称,11,数字代码,sh/sz代码,名称,..."
-    url = f"http://suggest3.sinajs.cn/suggest/?key={urllib.parse.quote(name)}&type=11"
-    try:
-        req = urllib.request.Request(url, headers=UA)
-        raw = urllib.request.urlopen(req, timeout=10).read().decode("gbk", errors="ignore")
-        # 解析 var suggestvalue="...";
-        m = re.search(r'suggestvalue\s*=\s*"([^"]*)"', raw)
-        if not m:
-            result = None
-        else:
-            fields = m.group(1).split(",")
-            # field[3] = sh600183 / sz002156 等
-            market_code = fields[3] if len(fields) > 3 else ""
-            if re.match(r'^(sh|sz)\d{6}$', market_code):
-                std_name = fields[0] if fields[0] else name
-                result = (market_code, std_name)
+
+def load_stock_dict(refresh=False):
+    """加载 A 股名称字典 {name: code}。优先用缓存，过期或 --refresh 时重新下载。"""
+    if not refresh and os.path.exists(STOCK_LIST_FILE):
+        try:
+            with open(STOCK_LIST_FILE, encoding="utf-8") as f:
+                cached = json.load(f)
+            age = time.time() - cached.get("updated_at", 0)
+            if age < STOCK_LIST_TTL:
+                log(f"使用缓存股票列表（{len(cached.get('stocks', []))} 只，{age/3600:.1f}小时前）")
+                return {s["name"]: s["code"] for s in cached["stocks"]}, cached["stocks"]
             else:
-                result = None
-        if cache is not None:
-            cache[name] = result
-        return result
-    except Exception:
-        if cache is not None:
-            cache[name] = None
-        return None
+                log(f"缓存已过期（{age/86400:.1f}天），重新下载")
+        except Exception:
+            pass
 
+    stocks = download_stock_list()
+    os.makedirs(DATA_DIR, exist_ok=True)
+    save_json(STOCK_LIST_FILE, {"updated_at": time.time(), "stocks": stocks})
+    log(f"股票列表已缓存到 {STOCK_LIST_FILE}")
+    return {s["name"]: s["code"] for s in stocks}, stocks
+
+
+# ---------- 候选提取与匹配 ----------
 
 def extract_candidates(timeline_data):
     """从 timeline.json 的 items 中提取候选股票名。
 
-    策略（避免暴力子串导致候选爆炸）：
+    策略：
       1. 提取所有连续中文字符段
       2. 长度 2-6 的完整段直接作为候选（独立短语可能是股票名）
       3. 长度 > 6 的长段，只提取前缀（3-6字）和后缀（3-6字）
@@ -132,7 +191,6 @@ def extract_candidates(timeline_data):
         text = scene.get("text", "")
         if not text:
             continue
-        # 提取所有连续中文字符段
         runs = re.findall(r'[\u4e00-\u9fff]+', text)
         for run in runs:
             n = len(run)
@@ -140,10 +198,8 @@ def extract_candidates(timeline_data):
                 continue
             candidates_for_run = []
             if 2 <= n <= 6:
-                # 完整段直接作为候选
                 candidates_for_run.append(run)
             elif n > 6:
-                # 长段：只提取前缀和后缀（3-6字）
                 for length in (3, 4, 5, 6):
                     candidates_for_run.append(run[:length])
                     candidates_for_run.append(run[-length:])
@@ -152,22 +208,30 @@ def extract_candidates(timeline_data):
                     continue
                 if cand in STOP_WORDS:
                     continue
-                # 过滤停用词的子串（如"伟达"是"英伟达"的子串）
                 if any(cand in sw and cand != sw for sw in STOP_WORDS):
                     continue
-                # 过滤以常见副词/介词开头的（不是股票名）
                 if cand[0] in INVALID_PREFIXES:
                     continue
-                # 过滤以常见助词结尾的（不是股票名）
                 if cand[-1] in INVALID_SUFFIXES:
                     continue
                 candidates.add(cand)
     return candidates
 
 
+def match_stock(name, stock_dict):
+    """在完整 A 股字典中精确匹配。
+
+    返回 code（如 sh600183）或 None。
+    """
+    if name in stock_dict:
+        return stock_dict[name]
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="从 timeline.json 自动提取股票名称")
     ap.add_argument("--dry", action="store_true", help="只扫描不写入配置")
+    ap.add_argument("--refresh", action="store_true", help="强制重新下载股票列表")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -177,6 +241,10 @@ def main():
         log("未找到 timeline.json，跳过股票提取")
         return 0
 
+    # 加载完整 A 股列表
+    stock_dict, _ = load_stock_dict(refresh=args.refresh)
+    log(f"A 股字典：{len(stock_dict)} 只股票")
+
     candidates = extract_candidates(timeline_data)
     log(f"从 timeline.json 发现 {len(candidates)} 个候选名称")
 
@@ -184,14 +252,16 @@ def main():
     existing_stocks = cfg.get("stocks", [])
     existing_names = {s.get("name") for s in existing_stocks}
 
-    cache = {}
     new_stocks = []
+    matched_count = 0
     for name in sorted(candidates):
         if name in existing_names:
             continue
-        result = search_stock(name, cache)
-        if result:
-            code, std_name = result
+        code = match_stock(name, stock_dict)
+        if code:
+            matched_count += 1
+            # 用字典中的标准名称
+            std_name = name
             if std_name in existing_names:
                 continue
             file_name = f"stock_{code}.png"
@@ -203,9 +273,7 @@ def main():
             }
             new_stocks.append(new_stock)
             existing_names.add(std_name)
-            log(f"  匹配：{name} → {std_name}（{code}）")
-        else:
-            log(f"  未匹配：{name}")
+            log(f"  匹配：{name} → {code}")
 
     if new_stocks and not args.dry:
         cfg["stocks"] = list(existing_stocks) + new_stocks
@@ -216,6 +284,7 @@ def main():
     else:
         log("没有新发现的股票，无需更新配置")
 
+    log(f"匹配结果：{matched_count} 个候选命中，{len(candidates) - matched_count} 个未命中")
     return 0
 
 

@@ -49,4 +49,8 @@ web/data/
 
 # Wrangler 本地状态
 worker/.wrangler/
+
+# 股票列表缓存（运行时下载，可过期）
+scripts/data/
+
 README.md
