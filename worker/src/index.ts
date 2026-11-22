@@ -229,16 +229,20 @@ app.get('/api/github/run', async (c) => {
 
   try {
     let run: any;
+    let jobsData: any = null;
     const runId = c.req.query('id');
     if (runId) {
-      const resp = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/actions/runs/${encodeURIComponent(runId)}`,
-        { headers }
-      );
-      if (!resp.ok) {
-        return c.json({ ok: false, error: `GitHub API 失败：${resp.status}` }, 502);
+      // 指定运行：并行请求 run 与 jobs，减少一次往返延迟
+      const base = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${encodeURIComponent(runId)}`;
+      const [runResp, jobsResp] = await Promise.all([
+        fetch(base, { headers }),
+        fetch(`${base}/jobs`, { headers }),
+      ]);
+      if (!runResp.ok) {
+        return c.json({ ok: false, error: `GitHub API 失败：${runResp.status}` }, 502);
       }
-      run = await resp.json() as any;
+      run = await runResp.json() as any;
+      if (jobsResp.ok) jobsData = await jobsResp.json() as any;
     } else {
       // 获取最近一次运行
       const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=1`;
@@ -266,11 +270,13 @@ app.get('/api/github/run', async (c) => {
       steps: [] as any[],
     };
 
-    // 获取步骤详情
-    const jobsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`;
-    const jobsResp = await fetch(jobsUrl, { headers });
-    if (jobsResp.ok) {
-      const jobsData = await jobsResp.json() as any;
+    // 获取步骤详情（已并行拿到则复用）
+    if (!jobsData) {
+      const jobsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`;
+      const jobsResp = await fetch(jobsUrl, { headers });
+      if (jobsResp.ok) jobsData = await jobsResp.json() as any;
+    }
+    if (jobsData) {
       const jobs = jobsData?.jobs || [];
       for (const job of jobs) {
         for (const step of job.steps || []) {

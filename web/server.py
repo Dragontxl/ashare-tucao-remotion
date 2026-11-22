@@ -977,11 +977,25 @@ def github_run(run_id: str = ""):
 
     try:
         # 获取运行（指定 id 或最近一次）
+        jobs_data = None
         if run_id:
-            runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs/{run_id}"
-            req = urllib.request.Request(runs_url, headers=headers)
-            resp = urllib.request.urlopen(req, timeout=15)
-            run = json.loads(resp.read())
+            base = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs/{run_id}"
+            # 并行请求 run 与 jobs，减少一次往返延迟
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _get(url):
+                r = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(r, timeout=15) as rp:
+                    return json.loads(rp.read())
+
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                fut_run = ex.submit(_get, base)
+                fut_jobs = ex.submit(_get, f"{base}/jobs")
+                run = fut_run.result()
+                try:
+                    jobs_data = fut_jobs.result()
+                except Exception:  # noqa: BLE001
+                    jobs_data = None
         else:
             runs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs?per_page=1"
             req = urllib.request.Request(runs_url, headers=headers)
@@ -1004,12 +1018,16 @@ def github_run(run_id: str = ""):
             "steps": [],
         }
 
-        # 获取步骤详情
-        jobs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs/{run['id']}/jobs"
-        try:
-            req2 = urllib.request.Request(jobs_url, headers=headers)
-            resp2 = urllib.request.urlopen(req2, timeout=15)
-            jobs_data = json.loads(resp2.read())
+        # 获取步骤详情（已并行拿到则复用）
+        if jobs_data is None:
+            jobs_url = f"https://api.github.com/repos/{gh['owner']}/{gh['repo']}/actions/runs/{run['id']}/jobs"
+            try:
+                req2 = urllib.request.Request(jobs_url, headers=headers)
+                resp2 = urllib.request.urlopen(req2, timeout=15)
+                jobs_data = json.loads(resp2.read())
+            except Exception:  # noqa: BLE001
+                jobs_data = None
+        if jobs_data:
             for job in jobs_data.get("jobs", []):
                 for step in job.get("steps", []):
                     run_info["steps"].append({
@@ -1017,8 +1035,6 @@ def github_run(run_id: str = ""):
                         "status": step.get("status", ""),
                         "conclusion": step.get("conclusion"),
                     })
-        except Exception:
-            pass  # 步骤获取失败不影响整体返回
 
         return {"ok": True, "run": run_info}
     except urllib.error.HTTPError as e:

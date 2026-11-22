@@ -791,7 +791,7 @@ function renderTasks() {
       if (action === 'retry') { ev.stopPropagation(); retryTask(t.id); return; }
       if (action === 'cancel') { ev.stopPropagation(); cancelTask(t.id); return; }
       if (action === 'delete') { ev.stopPropagation(); deleteTask(t.id); return; }
-      if (isCloud) openCloudDetail(t.run_id); else openDetail(t.id);
+      if (isCloud) openCloudDetail(t.run_id, t.date8); else openDetail(t.id);
     });
     list.appendChild(div);
   }
@@ -940,10 +940,11 @@ function renderMedia(t) {
 
 /* ── 云端运行详情 ───────────────────────────────────────── */
 
-function openCloudDetail(runId) {
+function openCloudDetail(runId, date8) {
   state.taskId = String(runId);
   state.cloudDetail = true;
   state.task = null;
+  state.cloudRunDate = date8 || '';
   state.logOffset = 0;
   $('#logBox').textContent = '云端运行的完整日志请在 GitHub Actions 查看（点击右上角「查看日志 ↗」）。';
   $('#mediaArea').innerHTML = '<p class="hint">运行完成后可在此预览视频与封面。</p>';
@@ -963,6 +964,9 @@ function openCloudDetail(runId) {
 
 function renderCloudDetail(run) {
   $('#detailTitle').textContent = run.name || '云端运行详情';
+  // 记录运行日期，供「上传B站」直接使用，避免再发一次慢查询
+  const createdDate = (run.created_at || '').slice(0, 10).replaceAll('-', '');
+  if (createdDate) state.cloudRunDate = createdDate;
   const badge = $('#detailStatus');
   const status = cloudStatus(run);
   badge.className = `badge ${badgeClass(status)}`;
@@ -1089,24 +1093,25 @@ async function renderCloudMedia(run) {
 async function cloudUploadBiliFromDetail() {
   const btn = $('#uploadBtn');
   if (!state.taskId) return;
+  const date8 = state.cloudRunDate || '';
+  if (!date8) {
+    toast('未获取到运行日期，无法上传，请刷新后重试', true);
+    return;
+  }
   btn.disabled = true;
   btn.textContent = '触发中…';
   state.cloudUploading = true;
   try {
-    // 查询运行详情获取日期
-    const r = await api(`/api/github/run?id=${encodeURIComponent(state.taskId)}`);
-    if (!r.ok || !r.run) throw new Error(r.error || '查询运行失败');
-    const date8 = (r.run.created_at || '').slice(0, 10).replaceAll('-', '');
     const resp = await api('/api/bilibili/upload', {
       method: 'POST',
       body: JSON.stringify({ date: date8 }),
     });
     toast(resp.message || 'B站上传任务已触发');
     state.cloudUploading = false;
-    btn.disabled = false;
-    btn.textContent = '上传B站';
-    // 开始轮询最新运行状态
-    startCloudRunPoll();
+    // 跳回运行记录，直接看到新触发的上传工作流
+    showView('tasks');
+    loadCloudTasks(true);
+    setTimeout(() => { if (state.view === 'tasks') loadCloudTasks(true); }, 3000);
   } catch (e) {
     toast(e.message, true);
     state.cloudUploading = false;
