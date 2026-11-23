@@ -13,6 +13,20 @@ from common import (ROOT, INPUT_DIR, SRC, CONFIG_DIR, load_config, save_config,
 
 VISUALS = ["hook", "title", "data", "punch", "topic", "text", "lesson", "outro"]
 TONES = ["negative", "positive", "warn", "neutral"]
+# 仅 data/text 场景允许配图；图表键与 public/charts 下的文件名对应
+CHART_KEYS = {"timeline", "kline", "global", "gold", "sectors", "breadth"}
+
+
+def chart_file(raw, visual):
+    """把 LLM 给的 chart 键规范成 charts/xxx.png；非法或场景不符时返回 None。"""
+    if visual not in ("data", "text"):
+        return None
+    key = str(raw or "").strip().lower()
+    if key.startswith("charts/"):
+        key = key[len("charts/"):]
+    if key.endswith(".png"):
+        key = key[:-len(".png")]
+    return f"charts/{key}.png" if key in CHART_KEYS else None
 
 SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博主，粉丝称你的节目为"盘面吐槽大会"。
 你的风格：短句、有梗、节奏快、反讽尖锐、金句频出，但数据必须真实、不编造。
@@ -26,7 +40,7 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
   "market_mood": "市场情绪四字总结，如 极度冰点",
   "ticker": "底部滚动行情快讯文案，把原文中的关键指数/个股涨跌串成一行，用空格分隔，如：上证 3533.79 -1.22%  沪金 -6%  工商银行 +3%",
   "sentences": [
-    {"id":1,"text":"口播文案（一句，20字以内最佳）","visual":"hook|title|data|punch|topic|text|lesson|outro","big":"大字（仅 data/title 需要，如 -1.41%）","label":"小标签（可选）","tone":"negative|positive|warn|neutral"}
+    {"id":1,"text":"口播文案（一句，20字以内最佳）","visual":"hook|title|data|punch|topic|text|lesson|outro","big":"大字（仅 data/title 需要，如 -1.41%）","label":"小标签（可选）","tone":"negative|positive|warn|neutral","chart":"timeline|kline|global|gold|sectors|breadth|"}
   ]
 }
 
@@ -36,7 +50,16 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
 3. 数据全部来自用户原文，禁止编造数字。
 4. tone 遵循A股习惯：下跌/利空=negative，上涨/利好=positive，警示/反讽=warn，中性=neutral。
 5. 每句 text 独立成句、口语化，适合配音朗读；不要出现 Markdown、括号注释、英文。
-6. big 字段只放最核心的数字或短语，简短有力。"""
+6. big 字段只放最核心的数字或短语，简短有力。
+7. chart 字段（画面配图，务必与文字语义严格对应）：只有 data/text 场景可填，且仅当该句明确在讲对应图表的内容时才填：
+   - timeline：指数分时走势、开盘/盘中/尾盘、日内最高最低、指数点位
+   - kline：日K线、技术形态、支撑/压力、连续多日走势
+   - global：外围市场（日经、韩股、港股、美股、亚太）
+   - gold：黄金/白银/贵金属/金价
+   - sectors：板块或个股涨跌对比、资金流向、某板块表现
+   - breadth：涨跌家数、涨停跌停家数、连板、炸板、市场情绪
+   与以上都不直接相关时留空字符串 ""；hook/title/punch/topic/lesson/outro 一律留空。
+   宁可留空，也不要勉强配一张不相关的图。"""
 
 
 def generate_with_llm(cfg, article):
@@ -74,6 +97,9 @@ def normalize(data, cfg):
             item["big"] = str(s["big"]).strip()
         if s.get("label"):
             item["label"] = str(s["label"]).strip()
+        chart = chart_file(s.get("chart"), visual)
+        if chart:
+            item["chart"] = chart
         if not item["text"]:
             continue
         out.append(item)
@@ -85,7 +111,9 @@ def normalize(data, cfg):
     # 确保有开头和结尾
     if out[0]["visual"] not in ("hook", "title"):
         out[0]["visual"] = "hook"
+        out[0].pop("chart", None)
     out[-1]["visual"] = "outro"
+    out[-1].pop("chart", None)
     return {
         "article_title": data.get("article_title") or cfg.get("article_title", "盘面吐槽"),
         "hook_title": data.get("hook_title") or cfg.get("hook_title", "今天这盘面"),

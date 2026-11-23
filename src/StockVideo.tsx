@@ -5,6 +5,7 @@ import {
 } from "remotion";
 import tl from "./timeline.json";
 import cfg from "./config.json";
+import { matchChart } from "./chartMatch";
 
 type Tone = "negative" | "positive" | "warn" | "neutral";
 type Item = {
@@ -20,49 +21,6 @@ const TONE: Record<Tone, { main: string; glow: string; soft: string }> = {
   warn: { main: "#ffb02e", glow: "rgba(255,176,46,0.30)", soft: "rgba(255,176,46,0.12)" },
   neutral: { main: "#eef3ff", glow: "rgba(160,190,255,0.22)", soft: "rgba(160,190,255,0.10)" },
 };
-
-// 图表文件清单（真实行情图 + 概览图），用于自动匹配
-const CHART_FILES: string[] = [
-  "charts/timeline.png", "charts/kline.png", "charts/global.png",
-  "charts/gold.png", "charts/sectors.png", "charts/breadth.png",
-  ...(cfg.stocks || []).map((s: any) => `charts/${s.file}`),
-];
-
-// 关键词 -> 图表 的匹配规则（按优先级）
-const CHART_RULES: { keys: string[]; file: string }[] = [
-  { keys: ["分时", "低开", "深V", "探底", "反弹", "开盘", "3500", "收盘", "指数"], file: "charts/timeline.png" },
-  { keys: ["K线", "日K", "二次探底", "技术", "支撑", "下影线"], file: "charts/kline.png" },
-  { keys: ["日经", "韩国", "台湾", "亚太", "港股", "全球", "美股", "外围"], file: "charts/global.png" },
-  { keys: ["黄金", "沪金", "沪银", "贵金属", "金价", "现货"], file: "charts/gold.png" },
-  { keys: ["涨跌家数", "上涨", "下跌", "涨停", "跌停", "连板", "炸板", "情绪", "渡劫"], file: "charts/breadth.png" },
-  { keys: ["银行", "护盘", "板块", "ETF", "保险", "资金", "芯片", "机器人", "半导体"], file: "charts/sectors.png" },
-];
-// 个股名 -> 图表
-const STOCK_RULES = (cfg.stocks || []).map((s: any) => ({
-  keys: [s.name, s.code], file: `charts/${s.file}`,
-}));
-
-function matchChart(item: Item): string | null {
-  if (item.chart && CHART_FILES.includes(item.chart)) return item.chart;
-  const hay = `${item.label || ""} ${item.big || ""} ${item.text || ""}`;
-
-  // 优先匹配个股图表（适用于 data / text 等所有场景类型）
-  // text 场景如「生益科技、金安国纪全封板」会命中个股分时+K线合并图
-  for (const r of STOCK_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
-
-  // data 场景且带 big：匹配通用图表规则，兜底 breadth
-  if (item.visual === "data" && item.big) {
-    for (const r of CHART_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
-    return "charts/breadth.png";
-  }
-
-  // text 场景：尝试匹配通用图表规则（如提到涨停/板块/情绪等）
-  if (item.visual === "text") {
-    for (const r of CHART_RULES) if (r.keys.some((k) => hay.includes(k))) return r.file;
-  }
-
-  return null;
-}
 
 function bigFontSize(s = "") {
   if (s.length <= 3) return 200;
@@ -409,7 +367,7 @@ export const StockVideo: React.FC = () => {
     if (frame >= items[i].startFrame) current = items[i];
     else break;
   }
-  const chart = matchChart(current);
+  const chart = matchChart(current, cfg.stocks || []);
   return (
     <AbsoluteFill style={{ backgroundColor: "#0a0e1c" }}>
       <Audio src={staticFile("voiceover.mp3")} />
