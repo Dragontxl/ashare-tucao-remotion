@@ -15,6 +15,8 @@ VISUALS = ["hook", "title", "data", "punch", "topic", "text", "lesson", "outro"]
 TONES = ["negative", "positive", "warn", "neutral"]
 # 仅 data/text 场景允许配图；图表键与 public/charts 下的文件名对应
 CHART_KEYS = {"timeline", "kline", "global", "gold", "sectors", "breadth"}
+# 供 make_charts.py 画图的真实汇总数据
+SUMMARY_LIST_KEYS = ("breadth", "global_market", "precious_metal")
 
 
 def chart_file(raw, visual):
@@ -28,6 +30,89 @@ def chart_file(raw, visual):
         key = key[:-len(".png")]
     return f"charts/{key}.png" if key in CHART_KEYS else None
 
+
+def _num(value, lo=-100000.0, hi=100000.0):
+    """把值转成有限数字；非法值返回 None。"""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    if x != x or x < lo or x > hi:
+        return None
+    return int(x) if x.is_integer() else round(x, 4)
+
+
+def normalize_summary(raw):
+    """校验 LLM 输出的 summary：只保留真实、可画图的数字。"""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key in SUMMARY_LIST_KEYS:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        cleaned = []
+        for it in items[:8]:
+            if not isinstance(it, dict):
+                continue
+            label = str(it.get("label", "")).strip()[:16]
+            value = _num(it.get("value"), -10000, 100000)
+            if label and value is not None:
+                cleaned.append({"label": label, "value": value})
+        if cleaned:
+            out[key] = cleaned
+    note = str(raw.get("breadth_note", "")).strip()
+    if note:
+        out["breadth_note"] = note[:60]
+    return out
+
+
+def extract_summary(article):
+    """从原文中确定性提取涨跌家数等真实数字（LLM 失败时的兜底）。"""
+    text = re.sub(r"\s+", "", article or "")
+    out = {}
+
+    def count(pattern):
+        m = re.search(pattern, text)
+        return int(m.group(1)) if m else None
+
+    up = count(r"上涨家数[^0-9]{0,8}(\d+)\s*多?家")
+    down = count(r"下跌家数[^0-9]{0,8}(\d+)\s*多?家")
+    limit_up = count(r"涨停\s*(\d+)\s*家")
+    limit_down = count(r"跌停\s*(\d+)\s*家")
+    breadth = []
+    if up is not None:
+        breadth.append({"label": "上涨家数", "value": up})
+    if down is not None:
+        breadth.append({"label": "下跌家数", "value": down})
+    if limit_up is not None:
+        breadth.append({"label": "涨停", "value": limit_up})
+    if limit_down is not None:
+        breadth.append({"label": "跌停", "value": limit_down})
+    if breadth:
+        out["breadth"] = breadth
+
+    notes = []
+    m = re.search(r"炸板率[^0-9]{0,4}([\d.]+)%", text)
+    if m:
+        notes.append(f"炸板率 {m.group(1)}%")
+    m = re.search(r"连板家数[^0-9]{0,6}(\d+)家", text)
+    if m:
+        notes.append(f"连板 {m.group(1)} 家")
+    if notes:
+        out["breadth_note"] = "，".join(notes)
+    return out
+
+
+def merge_summary(primary, fallback):
+    """LLM 结果优先，缺失的字段用原文正则提取补齐。"""
+    out = dict(primary or {})
+    for key, value in (fallback or {}).items():
+        if not out.get(key):
+            out[key] = value
+    return out
+
+
 SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博主，粉丝称你的节目为"盘面吐槽大会"。
 你的风格：短句、有梗、节奏快、反讽尖锐、金句频出，但数据必须真实、不编造。
 你会把枯燥的复盘数据变成让人又笑又心酸的口播稿。常使用的手法：反转、比喻、拟人、谐音、夸张对比。
@@ -39,6 +124,12 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
   "date_label": "日期标签，如 11月20日",
   "market_mood": "市场情绪四字总结，如 极度冰点",
   "ticker": "底部滚动行情快讯文案，把原文中的关键指数/个股涨跌串成一行，用空格分隔，如：上证 3533.79 -1.22%  沪金 -6%  工商银行 +3%",
+  "summary": {
+    "breadth": [{"label":"上涨家数","value":297},{"label":"下跌家数","value":4800},{"label":"涨停","value":30},{"label":"跌停","value":61}],
+    "breadth_note": "炸板率 28.6%，连板仅 4 家",
+    "global_market": [{"label":"日经225","value":-5.0},{"label":"韩国综指","value":-5.21}],
+    "precious_metal": [{"label":"沪金主力","value":-6.0}]
+  },
   "sentences": [
     {"id":1,"text":"口播文案（一句，20字以内最佳）","visual":"hook|title|data|punch|topic|text|lesson|outro","big":"大字（仅 data/title 需要，如 -1.41%）","label":"小标签（可选）","tone":"negative|positive|warn|neutral","chart":"timeline|kline|global|gold|sectors|breadth|"}
   ]
@@ -59,7 +150,13 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
    - sectors：板块或个股涨跌对比、资金流向、某板块表现
    - breadth：涨跌家数、涨停跌停家数、连板、炸板、市场情绪
    与以上都不直接相关时留空字符串 ""；hook/title/punch/topic/lesson/outro 一律留空。
-   宁可留空，也不要勉强配一张不相关的图。"""
+   宁可留空，也不要勉强配一张不相关的图。
+8. 同一张图最多只给一个镜头配图。多个镜头都在讲同类数据时，只给最合适的一句填 chart，其余留空。
+9. summary 字段只填原文中明确出现的真实数字，禁止编造：
+   - breadth：涨跌家数/涨停/跌停/连板等「家数」，value 用整数；
+   - global_market / precious_metal：涨跌幅百分比，value 用数字，跌为负数；
+   - breadth_note：炸板率、连板断层等一句话补充；
+   - 原文没有的字段留空数组 [] 或空字符串 ""。"""
 
 
 def generate_with_llm(cfg, article):
@@ -71,7 +168,7 @@ def generate_with_llm(cfg, article):
         try:
             reply = call_llm(cfg, SYSTEM_PROMPT, user, json_mode=True)
             data = extract_json(reply)
-            return normalize(data, cfg)
+            return normalize(data, cfg, article)
         except Exception as e:  # noqa: BLE001
             last_err = e
             log(f"LLM 文稿解析失败（第 {attempt}/2 次）：{type(e).__name__} {e}")
@@ -80,7 +177,7 @@ def generate_with_llm(cfg, article):
     raise last_err
 
 
-def normalize(data, cfg):
+def normalize(data, cfg, article=""):
     """校验/补全 LLM 输出，保证分镜结构合法。"""
     sentences = data.get("sentences") or []
     out = []
@@ -114,12 +211,14 @@ def normalize(data, cfg):
         out[0].pop("chart", None)
     out[-1]["visual"] = "outro"
     out[-1].pop("chart", None)
+    summary = merge_summary(normalize_summary(data.get("summary")), extract_summary(article))
     return {
         "article_title": data.get("article_title") or cfg.get("article_title", "盘面吐槽"),
         "hook_title": data.get("hook_title") or cfg.get("hook_title", "今天这盘面"),
         "date_label": data.get("date_label") or cfg.get("date_label", ""),
         "market_mood": data.get("market_mood") or cfg.get("market_mood", ""),
         "ticker": data.get("ticker") or cfg.get("ticker", ""),
+        "summary": summary,
         "sentences": out,
     }
 
@@ -204,6 +303,7 @@ def fallback_generate(cfg, article):
         "date_label": cfg.get("date_label") or "今日",
         "market_mood": cfg.get("market_mood") or "情绪冰点",
         "ticker": cfg.get("ticker") or "",
+        "summary": extract_summary(article),
         "sentences": merged,
     }
 
@@ -237,12 +337,16 @@ def main():
         result = fallback_generate(cfg, article)
 
     save_json(os.path.join(SRC, "sentences.json"), result["sentences"])
+    # 汇总数据必须每次覆盖，避免沿用上一交易日的旧数字
+    cfg["summary"] = result.get("summary") or {}
     # 把生成的元信息写回 config.json（供封面/简介/组件读取）
     for k in ("article_title", "hook_title", "date_label", "market_mood", "ticker"):
         if result.get(k):
             cfg[k] = result[k]
     save_config(cfg)
     log(f"文稿生成完成：{result['article_title']} | {len(result['sentences'])} 句")
+    if cfg["summary"]:
+        log(f"汇总数据：{json.dumps(cfg['summary'], ensure_ascii=False)}")
     log("原始文稿已保存：src/sentences.json")
 
 

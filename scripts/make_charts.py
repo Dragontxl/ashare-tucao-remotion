@@ -4,10 +4,12 @@
   timeline.png  指数分时（真实）
   kline.png     指数日K（真实）
   stock_*.png   个股分时+日K（真实，按 config.stocks）
-  global.png    全球市场对比（config.summary 或真实指数推算）
-  gold.png      贵金属（config.summary 或默认）
+  global.png    全球市场对比（原文提取，缺失则不生成）
+  gold.png      贵金属（原文提取，缺失则不生成）
   sectors.png   板块/个股涨跌对比（真实个股涨跌）
-  breadth.png   市场情绪（config.summary 或默认）
+  breadth.png   市场情绪（原文提取，缺失则不生成）
+
+生成完成后写入 src/charts_manifest.json，渲染端只会引用真实存在的图表。
 """
 import os
 import sys
@@ -18,13 +20,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (CHARTS, MARKET_DATA, load_config, load_json,
+from common import (CHARTS, MARKET_DATA, SRC, load_config, load_json, save_json,
                     find_chinese_font, log)
 
 cfg = load_config()
 INDEX = cfg.get("index_code", "sh000001")
 STOCKS = cfg.get("stocks", [])
-SUMMARY = cfg.get("summary", {})  # 可选：从原文提取的汇总数字
+SUMMARY = cfg.get("summary") or {}  # 可选：从原文提取的汇总数字
 
 # 字体（跨平台）
 FONT_PATH = find_chinese_font()
@@ -70,11 +72,23 @@ def style_ax(ax):
     ax.tick_params(colors=MUTED, labelsize=12)
 
 
+GENERATED = []
+
+
 def finish(fig, name):
     plt.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(os.path.join(CHARTS, name), dpi=110, facecolor=DARK, bbox_inches="tight")
     plt.close(fig)
+    GENERATED.append(f"charts/{name}")
     log(f"生成图表 {name}")
+
+
+def drop(name):
+    """删除过期图表：宁可没有图，也不让旧图/假数据出现在视频里。"""
+    path = os.path.join(CHARTS, name)
+    if os.path.exists(path):
+        os.remove(path)
+        log(f"删除过期图表 {name}")
 
 
 def plot_index_timeline():
@@ -82,6 +96,7 @@ def plot_index_timeline():
     k = load(f"{INDEX}_kline.json")
     if not d or not k or len(k["kline"]) < 2:
         log("跳过 timeline.png：缺少指数数据")
+        drop("timeline.png")
         return
     prev = k["kline"][-2]["close"]
     trends = d["trends"]
@@ -127,6 +142,7 @@ def plot_index_kline():
     d = load(f"{INDEX}_kline.json")
     if not d or len(d["kline"]) < 5:
         log("跳过 kline.png：缺少指数K线")
+        drop("kline.png")
         return
     rows = d["kline"][-20:]
     fig, (ax, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True,
@@ -160,6 +176,7 @@ def plot_stock(s):
     kd = load(f"{code}_kline.json"); td = load(f"{code}_trends.json")
     if not kd or not td or len(kd["kline"]) < 2 or not td["trends"]:
         log(f"跳过 {fname}：缺少 {name} 数据")
+        drop(fname)
         return
     rows = kd["kline"][-15:]
     prev = kd["kline"][-2]["close"]; last = kd["kline"][-1]
@@ -213,55 +230,73 @@ def bar_chart(name, title_text, items, subtitle=NOTE):
 
 
 def plot_summary():
-    # 全球市场：优先用 config.summary.global_market
+    # 全球市场：只使用原文提取的真实数据；没有就留白，不再拿上证指数冒充
     gm = SUMMARY.get("global_market")
     if gm:
         bar_chart("global.png", "全球市场表现对比",
                   [(x["label"], float(x["value"])) for x in gm], "")
     else:
-        # 用真实指数涨跌兜底
-        k = load(f"{INDEX}_kline.json")
-        if k and len(k["kline"]) >= 2:
-            r0, r1 = k["kline"][-2], k["kline"][-1]
-            chg = (r1["close"] / r0["close"] - 1) * 100
-            bar_chart("global.png", f"{cfg.get('index_name','上证指数')}最新涨跌",
-                      [(cfg.get("index_name", "上证指数"), chg)])
+        drop("global.png")
 
-    # 贵金属：config.summary.precious_metal
+    # 贵金属：只使用原文提取的真实数据；没有就留白，不再硬编码 -6%/-9%
     pm = SUMMARY.get("precious_metal")
     if pm:
         bar_chart("gold.png", "贵金属市场表现",
                   [(x["label"], float(x["value"])) for x in pm], "")
     else:
-        bar_chart("gold.png", "贵金属观察",
-                  [("沪金主力", -6.0), ("沪银主力", -9.0)], "")
+        drop("gold.png")
 
-    # 板块分化：用真实个股涨跌
+    # 板块分化：用真实个股涨跌；没有真实数据就不画
     items = []
     for s in STOCKS:
         kd = load(f"{s['code']}_kline.json")
         if kd and len(kd["kline"]) >= 2:
             chg = (kd["kline"][-1]["close"] / kd["kline"][-2]["close"] - 1) * 100
             items.append((s["name"], chg))
-    if not items:
-        items = [("工商银行", 3.0), ("科创50", -3.0)]
-    bar_chart("sectors.png", "个股/板块涨跌分化", items)
+    if items:
+        bar_chart("sectors.png", "个股/板块涨跌分化", items)
+    else:
+        drop("sectors.png")
 
-    # 市场情绪 breadth
-    br = SUMMARY.get("breadth")
-    if br:
-        labels = [x["label"] for x in br]; vals = [float(x["value"]) for x in br]
+    # 市场情绪 breadth：只用原文的真实家数，禁止假数据兜底
+    br = SUMMARY.get("breadth") or []
+    counts = [(x["label"], float(x["value"])) for x in br
+              if "率" not in x["label"] and "%" not in x["label"]]
+    percents = [(x["label"], float(x["value"])) for x in br
+                if "率" in x["label"] or "%" in x["label"]]
+    if counts:
+        labels = [i[0] for i in counts]
+        vals = [i[1] for i in counts]
         fig, ax = plt.subplots(figsize=(11, 7)); fig.patch.set_facecolor(DARK); style_ax(ax)
-        bars = ax.bar(labels, vals, color=[DOWN if "跌" in l or "停" in l else ACCENT for l in labels], alpha=0.85)
+        bars = ax.bar(labels, vals, color=[DOWN if "跌" in l else (UP if "涨" in l else ACCENT) for l in labels],
+                      alpha=0.85)
         for b, v in zip(bars, vals):
-            ax.text(b.get_x() + b.get_width() / 2, v, f"{int(v)}", ha="center", va="bottom",
+            ax.text(b.get_x() + b.get_width() / 2, v, f"{int(v)}家", ha="center", va="bottom",
                     color=TEXT, fontsize=14, fontweight="bold", fontproperties=fp)
-        title(ax, "市场情绪概览"); note(fig)
+        subtitle = " · ".join([f"{l} {v:g}%" for l, v in percents])
+        if SUMMARY.get("breadth_note"):
+            subtitle = (subtitle + " · " if subtitle else "") + str(SUMMARY["breadth_note"])
+        title(ax, "市场情绪概览"); note(fig, subtitle or NOTE)
+        finish(fig, "breadth.png")
+    elif percents:
+        labels = [i[0] for i in percents]
+        vals = [i[1] for i in percents]
+        fig, ax = plt.subplots(figsize=(11, 7)); fig.patch.set_facecolor(DARK); style_ax(ax)
+        bars = ax.bar(labels, vals, color=ACCENT, alpha=0.85)
+        for b, v in zip(bars, vals):
+            ax.text(b.get_x() + b.get_width() / 2, v, f"{v:g}%", ha="center", va="bottom",
+                    color=TEXT, fontsize=14, fontweight="bold", fontproperties=fp)
+        note(fig, SUMMARY.get("breadth_note") or NOTE)
+        title(ax, "市场情绪概览")
         finish(fig, "breadth.png")
     else:
-        bar_chart("breadth.png", "市场情绪概览",
-                  [("上涨", 297 / 48), ("下跌", 100), ("涨停", 30 / 4.8), ("跌停", 61 / 4.8)],
-                  "")
+        drop("breadth.png")
+
+
+def write_manifest():
+    """记录本次真实生成的图表，渲染端据此过滤，避免引用不存在的图片。"""
+    save_json(os.path.join(SRC, "charts_manifest.json"), {"files": sorted(GENERATED)})
+    log(f"图表清单：{len(GENERATED)} 张")
 
 
 def main():
@@ -270,6 +305,7 @@ def main():
     for s in STOCKS:
         plot_stock(s)
     plot_summary()
+    write_manifest()
     log("全部图表生成完成")
 
 

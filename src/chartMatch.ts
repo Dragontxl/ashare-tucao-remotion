@@ -7,6 +7,7 @@
  * 2. 大模型显式指定的 chart 优先（generate_script.py 已做场景与文件名校验）。
  * 3. 个股图表最具体，其次才按加权关键词选择通用图表。
  * 4. 没有足够把握就不配图，宁可留白也不配错图（不再兜底 breadth）。
+ * 5. 全片图表去重：同一张图默认只出现一次，避免多个镜头复用同一张图。
  */
 
 export type ChartItem = {
@@ -74,11 +75,24 @@ export function chartFiles(stocks: StockRef[] = []): string[] {
   ];
 }
 
-export function matchChart(item: ChartItem, stocks: StockRef[] = []): string | null {
-  if (item.visual !== "data" && item.visual !== "text") return null;
+/**
+ * 返回该镜头可用的图表候选（按可信度从高到低）。
+ * available 为实际已生成的图表清单；传 undefined 表示不做过滤（兼容旧数据）。
+ */
+export function chartCandidates(
+  item: ChartItem,
+  stocks: StockRef[] = [],
+  available?: string[],
+): string[] {
+  if (item.visual !== "data" && item.visual !== "text") return [];
 
-  // 1. 大模型显式指定的图表优先
-  if (item.chart && chartFiles(stocks).includes(item.chart)) return item.chart;
+  const pool = available ? new Set(available) : null;
+  const ok = (file: string) => !pool || pool.has(file);
+
+  // 1. 大模型显式指定的图表最可信：只认这一张，不降级到别的图
+  if (item.chart && chartFiles(stocks).includes(item.chart)) {
+    return ok(item.chart) ? [item.chart] : [];
+  }
 
   const hay = `${item.label || ""} ${item.big || ""} ${item.text || ""}`;
 
@@ -93,23 +107,64 @@ export function matchChart(item: ChartItem, stocks: StockRef[] = []): string | n
       }
     }
   }
-  if (stock) return stock.file;
+  if (stock && ok(stock.file)) return [stock.file];
 
-  // 3. 通用图表按加权得分选择；同分时优先更具体的板块/个股/贵金属图
-  let bestFile: string | null = null;
-  let bestScore = 0;
-  let bestPriority = -1;
-  for (const r of CHART_RULES) {
+  // 3. 通用图表按加权得分排序；同分时优先更具体的板块/个股/贵金属图
+  const scored = CHART_RULES.map((r) => {
     let score = 0;
     for (const k of r.strong) if (hay.includes(k)) score += 3;
     for (const k of r.weak) if (hay.includes(k)) score += 1;
-    if (score > 0 && (score > bestScore || (score === bestScore && r.priority > bestPriority))) {
-      bestScore = score;
-      bestFile = r.file;
-      bestPriority = r.priority;
-    }
-  }
+    return { file: r.file, score, priority: r.priority };
+  })
+    .filter((r) => r.score > 0 && ok(r.file))
+    .sort((a, b) => b.score - a.score || b.priority - a.priority);
+
   // data 场景本身就在讲数字，命中一个关键词即可；text 场景要求更高把握
   const threshold = item.visual === "text" ? 2 : 1;
-  return bestScore >= threshold ? bestFile : null;
+  return scored.filter((r) => r.score >= threshold).map((r) => r.file);
+}
+
+export function matchChart(
+  item: ChartItem,
+  stocks: StockRef[] = [],
+  available?: string[],
+): string | null {
+  return chartCandidates(item, stocks, available)[0] ?? null;
+}
+
+export type AssignOptions = {
+  /** 同一张图在全片最多出现几次（默认 1：绝不重复） */
+  maxPerFile?: number;
+  /** 同一张图两次出现之间至少间隔多少个镜头 */
+  minGap?: number;
+};
+
+/**
+ * 为整条时间轴分配图表，并保证同一张图不会反复出现。
+ *
+ * 规则：按镜头顺序依次处理；只有当前最可信的候选图满足「未超次数 + 间隔足够」
+ * 时才采用，否则留白。不会为了凑图而降级到语义更弱的图表，避免张冠李戴。
+ */
+export function assignCharts(
+  items: ChartItem[],
+  stocks: StockRef[] = [],
+  available?: string[],
+  opts: AssignOptions = {},
+): (string | null)[] {
+  const maxPerFile = opts.maxPerFile ?? 1;
+  const minGap = opts.minGap ?? 0;
+  const used = new Map<string, number>();
+  const lastAt = new Map<string, number>();
+
+  return items.map((item, index) => {
+    const file = chartCandidates(item, stocks, available)[0];
+    if (!file) return null;
+    const count = used.get(file) ?? 0;
+    if (count >= maxPerFile) return null;
+    const prev = lastAt.get(file);
+    if (prev !== undefined && index - prev < minGap) return null;
+    used.set(file, count + 1);
+    lastAt.set(file, index);
+    return file;
+  });
 }

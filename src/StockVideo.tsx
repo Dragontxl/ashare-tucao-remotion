@@ -5,7 +5,8 @@ import {
 } from "remotion";
 import tl from "./timeline.json";
 import cfg from "./config.json";
-import { matchChart } from "./chartMatch";
+import manifest from "./charts_manifest.json";
+import { assignCharts } from "./chartMatch";
 
 type Tone = "negative" | "positive" | "warn" | "neutral";
 type Item = {
@@ -28,6 +29,18 @@ function bigFontSize(s = "") {
   if (s.length <= 10) return 108;
   return 82;
 }
+
+// 实际生成的图表清单（make_charts.py 写入）；null 表示未知，不做过滤（兼容旧数据）
+const AVAILABLE: string[] | undefined =
+  (manifest as { files?: string[] | null }).files ?? undefined;
+
+// 全片统一分配图表：同一张图最多出现一次，避免多个镜头复用同一张图
+const CHART_ASSIGN = assignCharts(tl.items as Item[], cfg.stocks || [], AVAILABLE);
+const CHART_BY_ID = new Map<number, string>();
+(tl.items as Item[]).forEach((item, i) => {
+  const file = CHART_ASSIGN[i];
+  if (file) CHART_BY_ID.set(item.id, file);
+});
 
 // 背景：深色渐变 + 网格 + 光斑 + 暗角 + 红色跑马灯
 function Backdrop({ item }: { item: Item }) {
@@ -367,7 +380,7 @@ export const StockVideo: React.FC = () => {
     if (frame >= items[i].startFrame) current = items[i];
     else break;
   }
-  const chart = matchChart(current, cfg.stocks || []);
+  const chart = CHART_BY_ID.get(current.id) ?? null;
   return (
     <AbsoluteFill style={{ backgroundColor: "#0a0e1c" }}>
       <Audio src={staticFile("voiceover.mp3")} />
