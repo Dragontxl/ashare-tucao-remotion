@@ -461,6 +461,7 @@ function collectCloudPayload() {
   return {
     date: inputToDate8($('#taskDate').value),
     article: article,
+    article_mode: mode,
     video_title: $('#taskTitle').value.trim(),
     concurrency: String($('#concurrency').value || '4'),
     force: $('#optForce').checked,
@@ -478,9 +479,20 @@ async function cloudRun() {
   $('#cloudRunProgress').innerHTML = '';
   $('#cloudRunProgress').hidden = true;
   try {
-    // 上传模式下提醒用户
-    if (state.sourceMode === 'upload' && !state.uploadedText) {
+    // 校验原文输入：任一来源为空时必须拦截，避免 dispatch 空 article
+    // 导致 GitHub Actions 静默回退到默认复盘文档
+    const mode = state.sourceMode;
+    if (mode === 'paste' && $('#articleText').value.trim().length < 50) {
+      statusEl.textContent = '⚠️ 请至少粘贴 50 字原文，或改用其他原文来源。';
+      return;
+    }
+    if (mode === 'url' && !$('#articleUrl').value.trim()) {
+      statusEl.textContent = '⚠️ 请填写原文 URL，或改用其他原文来源。';
+      return;
+    }
+    if (mode === 'upload' && !state.uploadedText) {
       statusEl.textContent = '⚠️ 请先选择要上传的文章文件（支持 .md / .txt）。';
+      return;
     }
     const payload = collectCloudPayload();
     state.cloudRunDate = payload.date;

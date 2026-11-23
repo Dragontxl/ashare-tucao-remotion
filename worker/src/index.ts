@@ -348,6 +348,7 @@ app.post('/api/github/dispatch', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const date_val = body.date || '';
   const article = body.article || '';
+  const article_mode = body.article_mode || '';
   const video_title = body.video_title || '';
   const concurrency = String(body.concurrency || '4');
   const force = body.force ?? false;
@@ -359,6 +360,7 @@ app.post('/api/github/dispatch', async (c) => {
     client_payload: {
       date: date_val,
       article,
+      article_mode,
       video_title,
       concurrency,
       force: String(force).toLowerCase(),

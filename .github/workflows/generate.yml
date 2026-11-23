@@ -65,6 +65,7 @@ jobs:
       UPLOAD: ${{ github.event.client_payload.upload || inputs.upload || false }}
       SKIP_LLM: ${{ github.event.client_payload.skip_llm || inputs.skip_llm || false }}
       UPLOAD_ONLY: ${{ github.event.client_payload.upload_only || inputs.upload_only || false }}
+      ARTICLE_MODE: ${{ github.event.client_payload.article_mode || inputs.article_mode || '' }}
 
     steps:
       - name: 检出仓库
@@ -190,6 +191,12 @@ jobs:
           [ -n "$CONCURRENCY" ] && args+=(--concurrency "$CONCURRENCY")
           [ "$SKIP_LLM" = "true" ] && args+=(--skip-llm)
           echo "运行参数：${args[*]}"
+          # 守卫：用户显式选择了自定义原文来源（粘贴/上传/URL）但原文为空时，
+          # 禁止静默回退到默认复盘文档，直接报错，避免「提交了粘贴文本却用了默认文档」
+          if [ -n "$ARTICLE_MODE" ] && [ "$ARTICLE_MODE" != "auto" ] && [ -z "$ARTICLE_INPUT" ]; then
+            echo "❌ 错误：原文来源模式为「$ARTICLE_MODE」，但未收到原文内容，拒绝回退默认文档。"
+            exit 1
+          fi
           python scripts/run_all.py "${args[@]}"
 
       - name: 整理产物
