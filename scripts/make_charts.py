@@ -221,8 +221,15 @@ def bar_chart(name, title_text, items, subtitle=NOTE):
     fig, ax = plt.subplots(figsize=(11, 7)); fig.patch.set_facecolor(DARK); style_ax(ax)
     bars = ax.barh(labels, vals, color=colors, alpha=0.85)
     ax.axvline(0, color=MUTED, lw=1)
+    # 数值标签画在柱体外侧，先按跨度预留空间，避免负值标签溢出到左侧股票名上
+    lo = min(min(vals), 0.0)
+    hi = max(max(vals), 0.0)
+    span = (hi - lo) or 1.0
+    pad = span * 0.22
+    ax.set_xlim(lo - pad, hi + pad)
+    ax.margins(x=0)
     for b, v in zip(bars, vals):
-        ax.text(v + (0.15 if v >= 0 else -0.15), b.get_y() + b.get_height() / 2,
+        ax.text(v + (span * 0.012 if v >= 0 else -span * 0.012), b.get_y() + b.get_height() / 2,
                 f"{v:+.2f}%", va="center", ha="left" if v >= 0 else "right",
                 color=TEXT, fontsize=13, fontproperties=fp, fontweight="bold")
     ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0f}%"))
