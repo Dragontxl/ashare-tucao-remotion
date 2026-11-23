@@ -116,6 +116,10 @@ jobs:
             cp config/config.example.json config/config.json
             echo "已从 config.example.json 复制 config.json"
           fi
+          if [ "$UPLOAD" = "true" ] && [ -z "$BILI_COOKIES" ]; then
+            echo "::error::已选择上传B站，但未配置 B站 Cookie。请在仓库 Settings → Secrets and variables → Actions 中添加 BILIBILI_COOKIES，内容为浏览器导出的 Cookie（JSON 数组或 name=value; 纯文本）"
+            exit 1
+          fi
           if [ -n "$BILI_COOKIES" ]; then
             printf '%s\n' "$BILI_COOKIES" > config/bilibili_cookies.json
             echo "已写入 B站 Cookie"
@@ -145,9 +149,11 @@ jobs:
         run: |
           mkdir -p config
           cp config/config.example.json config/config.json 2>/dev/null || true
-          if [ -n "$BILI_COOKIES" ]; then
-            printf '%s\n' "$BILI_COOKIES" > config/bilibili_cookies.json
+          if [ -z "$BILI_COOKIES" ]; then
+            echo "::error::未配置 B站 Cookie。请在仓库 Settings → Secrets and variables → Actions 中添加 BILIBILI_COOKIES，内容为浏览器导出的 Cookie（JSON 数组或 name=value; 纯文本）"
+            exit 1
           fi
+          printf '%s\n' "$BILI_COOKIES" > config/bilibili_cookies.json
           python scripts/upload_from_r2.py --date "$RUN_DATE"
 
       - name: 覆盖视频标题（可选）

@@ -41,6 +41,17 @@ jobs:
       - name: 安装 Playwright 浏览器（上传B站需要）
         run: python -m playwright install --with-deps chromium
 
+      - name: 校验 B站 Cookie 配置
+        shell: bash
+        env:
+          BILIBILI_COOKIES: ${{ secrets.BILIBILI_COOKIES }}
+        run: |
+          if [ -z "$BILIBILI_COOKIES" ]; then
+            echo "::error::未配置 B站 Cookie。请在仓库 Settings → Secrets and variables → Actions 中添加 BILIBILI_COOKIES，内容为浏览器导出的 Cookie（JSON 数组或 name=value; 纯文本格式）"
+            exit 1
+          fi
+          echo "已配置 B站 Cookie"
+
       - name: 从R2下载产物并上传B站
         shell: bash
         env:
