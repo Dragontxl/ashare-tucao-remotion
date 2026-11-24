@@ -7,6 +7,10 @@ on:
         description: '要上传的交易日 YYYYMMDD（留空=今天）'
         required: false
         default: ''
+      video_title:
+        description: '视频标题（留空=使用文稿标题）'
+        required: false
+        default: ''
 
   # 前端「上传B站」按钮触发（repository_dispatch，event_type = ashare-tucao-upload）
   repository_dispatch:
@@ -22,6 +26,7 @@ jobs:
     # 统一参数提取：repository_dispatch 优先读 client_payload，workflow_dispatch 读 inputs
     env:
       RUN_DATE: ${{ github.event.client_payload.date || inputs.date || '' }}
+      VIDEO_TITLE: ${{ github.event.client_payload.video_title || inputs.video_title || '' }}
 
     steps:
       - name: 检出仓库
@@ -57,6 +62,7 @@ jobs:
         env:
           BILIBILI_COOKIES: ${{ secrets.BILIBILI_COOKIES }}
           RUN_DATE: ${{ env.RUN_DATE }}
+          VIDEO_TITLE: ${{ env.VIDEO_TITLE }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -68,7 +74,9 @@ jobs:
             printf '%s\n' "$BILIBILI_COOKIES" > config/bilibili_cookies.json
             echo "已写入 B站 Cookie"
           fi
-          python scripts/upload_from_r2.py --date "$RUN_DATE"
+          title_args=()
+          [ -n "$VIDEO_TITLE" ] && title_args+=(--title "$VIDEO_TITLE")
+          python scripts/upload_from_r2.py --date "$RUN_DATE" "${title_args[@]}"
 
       - name: 上传上传结果到 R2
         if: always()

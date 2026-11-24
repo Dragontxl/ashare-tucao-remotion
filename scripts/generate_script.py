@@ -388,6 +388,12 @@ def main():
     for k in ("article_title", "hook_title", "date_label", "market_mood", "ticker"):
         if result.get(k):
             cfg[k] = result[k]
+    # 用户在提交任务时手动填写的标题优先，不被大模型标题覆盖
+    override_title = (os.environ.get("VIDEO_TITLE") or "").strip()
+    if override_title:
+        result["article_title"] = override_title
+        cfg["article_title"] = override_title
+        log(f"视频标题使用手动指定：{override_title}")
     save_config(cfg)
     log(f"文稿生成完成：{result['article_title']} | {len(result['sentences'])} 句")
     if cfg["summary"]:

@@ -114,10 +114,38 @@ def download_from_r2(client, bucket, run_prefix, files):
     return downloaded
 
 
+def title_from_desc(path):
+    """从 B站简介.md 的首行取文稿标题；取不到返回空串。"""
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                s = line.strip().lstrip("#").strip()
+                if s:
+                    return s[:80]
+    except OSError:
+        return ""
+    return ""
+
+
+def resolve_title(explicit, desc_path, cfg_title, date8_str):
+    """标题优先级：手动填写 > 文稿标题（简介首行）> config > 日期兜底。"""
+    if explicit and explicit.strip():
+        return explicit.strip()[:80], "手动填写"
+    t = title_from_desc(desc_path)
+    if t:
+        return t, "文稿标题（B站简介首行）"
+    if cfg_title and str(cfg_title).strip():
+        return str(cfg_title).strip()[:80], "config.article_title"
+    return f"A股盘面吐槽 {cn_date_from_8(date8_str)}", "日期兜底"
+
+
 def main():
     ap = argparse.ArgumentParser(description="从 R2 下载产物并上传 B站")
     ap.add_argument("--date", default=date8_from(""), help="交易日 YYYYMMDD")
     ap.add_argument("--run-prefix", default="", help="直接指定 R2 运行前缀（跳过查找）")
+    ap.add_argument("--title", default="", help="视频标题；留空则用文稿标题")
     args = ap.parse_args()
 
     date8_str = date8_from(args.date)
@@ -151,7 +179,8 @@ def main():
     bili = cfg.get("bilibili", {}) if isinstance(cfg.get("bilibili"), dict) else {}
     cookies = os.environ.get("BILIBILI_COOKIES_FILE") or bili.get("cookies_file") \
         or os.path.join(CONFIG_DIR, "bilibili_cookies.json")
-    title = cfg.get("article_title") or f"A股盘面吐槽 {cn_date_from_8(date8_str)}"
+    title, title_source = resolve_title(args.title, desc_path, cfg.get("article_title"), date8_str)
+    log(f"视频标题：{title}（来源：{title_source}）")
 
     cmd = [
         sys.executable, os.path.join(SCRIPTS, "upload_bilibili.py"),

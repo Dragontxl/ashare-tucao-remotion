@@ -643,6 +643,7 @@ async function loadCloudResult() {
       const videoUrl = `/api/r2/file?key=${encodeURIComponent(videoFile.key)}`;
       parts.push(`<video controls preload="metadata" src="${videoUrl}" class="cloud-video"></video>`);
       parts.push(`<div class="media-actions">
+        <input type="text" id="cloudUploadTitle" placeholder="视频标题（留空用文稿标题）" style="width: 260px" />
         <a class="btn btn-primary btn-sm" href="${videoUrl}" download>下载视频</a>
         <button class="btn btn-secondary btn-sm" id="cloudUploadBiliBtn">上传至 B站</button>
       </div>`);
@@ -673,9 +674,10 @@ async function cloudUploadBili() {
   if (btn) { btn.disabled = true; btn.textContent = '触发中…'; }
   try {
     const date = state.cloudRunDate || inputToDate8($('#taskDate').value);
+    const title = ($('#cloudUploadTitle')?.value || '').trim();
     const r = await api('/api/bilibili/upload', {
       method: 'POST',
-      body: JSON.stringify({ date }),
+      body: JSON.stringify({ date, video_title: title }),
     });
     toast(r.message || 'B站上传任务已触发');
     // 开始轮询运行状态
@@ -1041,10 +1043,20 @@ function renderCloudDetail(run) {
   // 云端模式无取消按钮
   $('#cancelBtn').hidden = true;
 
-  // 上传B站按钮：仅成功时显示
-  $('#uploadBtn').hidden = !(run.status === 'completed' && run.conclusion === 'success');
+  // 上传B站按钮：仅成功时显示（标题留空则用文稿标题）
+  const canUpload = run.status === 'completed' && run.conclusion === 'success';
+  $('#uploadBtn').hidden = !canUpload;
   $('#uploadBtn').disabled = state.cloudUploading;
   $('#uploadBtn').textContent = state.cloudUploading ? '触发中…' : '上传B站';
+  const titleInput = $('#uploadTitle');
+  if (titleInput) {
+    titleInput.hidden = !canUpload;
+    // 只在切换运行记录时清空，避免 1.5s 轮询把用户正在输入的标题抹掉
+    if (titleInput.dataset.runId !== String(run.id || '')) {
+      titleInput.value = '';
+      titleInput.dataset.runId = String(run.id || '');
+    }
+  }
 
   // B站结果区隐藏（云端在媒体区展示）
   $('#biliResult').hidden = true;
@@ -1116,7 +1128,7 @@ async function cloudUploadBiliFromDetail() {
   try {
     const resp = await api('/api/bilibili/upload', {
       method: 'POST',
-      body: JSON.stringify({ date: date8 }),
+      body: JSON.stringify({ date: date8, video_title: ($('#uploadTitle')?.value || '').trim() }),
     });
     toast(resp.message || 'B站上传任务已触发');
     state.cloudUploading = false;

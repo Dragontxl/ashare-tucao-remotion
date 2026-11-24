@@ -1458,6 +1458,8 @@ async def bilibili_upload(request: Request):
     """
     body = await request.json()
     date = body.get("date", "")
+    # 可选：用户手动填写的标题；留空则由「上传B站」工作流用文稿标题
+    video_title = str(body.get("video_title") or body.get("title") or "").strip()[:80]
 
     # 获取 GitHub 配置
     from common import load_config
@@ -1476,6 +1478,7 @@ async def bilibili_upload(request: Request):
         "event_type": "ashare-tucao-upload",
         "client_payload": {
             "date": date,
+            "video_title": video_title,
         },
     }
 

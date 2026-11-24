@@ -737,12 +737,15 @@ app.post('/api/bilibili/upload', async (c) => {
   }
   const body = await c.req.json().catch(() => ({}));
   const date = body.date || '';
+  // 可选：用户手动填写的标题；留空则由「上传B站」工作流用文稿标题
+  const video_title = String(body.video_title || body.title || '').trim().slice(0, 80);
 
   // 触发独立的「上传B站」工作流（ashare-tucao-upload），而非视频生成工作流
   const payload = {
     event_type: 'ashare-tucao-upload',
     client_payload: {
       date,
+      video_title,
     },
   };
 
