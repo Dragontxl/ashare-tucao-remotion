@@ -32,6 +32,23 @@ def lesson_text_ok(text):
     return t.rstrip("：:") not in LESSON_HEADINGS
 
 
+LESSON_LEAD_SUFFIX = ("方向", "策略", "提示", "建议", "忠告", "原则", "结论", "要点", "总结")
+
+
+def strip_lesson_lead(item):
+    """去掉 lesson 正文开头重复的小标题，如“回避方向：受……”“最后忠告：……”。"""
+    if item.get("visual") != "lesson":
+        return
+    m = re.match(r"^([^：:，,。！？]{2,8})[：:]\s*(.+)$", item.get("text", ""))
+    if not m:
+        return
+    lead, rest = m.group(1).strip(), m.group(2).strip()
+    if not rest or len(rest) < 10:
+        return
+    if lead == item.get("big") or lead.endswith(LESSON_LEAD_SUFFIX):
+        item["text"] = rest
+
+
 def chart_file(raw, visual):
     """把 LLM 给的 chart 键规范成 charts/xxx.png；非法或场景不符时返回 None。"""
     if visual not in ("data", "text"):
@@ -215,11 +232,7 @@ def normalize(data, cfg, article=""):
                 "visual": visual, "tone": tone}
         if s.get("big"):
             item["big"] = str(s["big"]).strip()
-        # lesson 的 text 若重复了小标题（"最后忠告：……"），去掉前缀，避免卡片上重复两遍
-        if visual == "lesson" and item.get("big") and item["text"].startswith(item["big"]):
-            stripped = item["text"][len(item["big"]):].lstrip("：:，,、 ")
-            if stripped:
-                item["text"] = stripped
+        strip_lesson_lead(item)
         if s.get("label"):
             item["label"] = str(s["label"]).strip()
         chart = chart_file(s.get("chart"), visual)
