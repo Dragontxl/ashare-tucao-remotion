@@ -352,7 +352,16 @@ function LessonScene({ item }: { item: Item }) {
         border: "2px solid rgba(120,170,255,0.35)", borderRadius: 22, fontFamily: FONT }}>
         <div style={{ fontSize: 24, color: "#79b4ff", letterSpacing: 6, fontWeight: 700, marginBottom: 22 }}>
           ⚠ 正经时刻 · 风险提示</div>
-        <div style={{ fontSize: 58, fontWeight: 800, color: c.main, lineHeight: 1.35 }}>{item.text}</div>
+        {item.big ? (
+          <>
+            <div style={{ fontSize: 52, fontWeight: 900, color: c.main, lineHeight: 1.25, letterSpacing: 4 }}>
+              {item.big}</div>
+            <div style={{ marginTop: 18, fontSize: item.text.length > 34 ? 30 : 34, fontWeight: 600,
+              color: "#dfe8ff", lineHeight: 1.65, letterSpacing: 1 }}>{item.text}</div>
+          </>
+        ) : (
+          <div style={{ fontSize: 58, fontWeight: 800, color: c.main, lineHeight: 1.35 }}>{item.text}</div>
+        )}
       </div>
     </AbsoluteFill>
   );

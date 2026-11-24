@@ -214,6 +214,8 @@ jobs:
           cp out/B站简介.md artifacts/ 2>/dev/null || true
           cp out/tags.txt artifacts/ 2>/dev/null || true
           cp out/bilibili_result.json artifacts/ 2>/dev/null || true
+          cp src/sentences.json artifacts/ 2>/dev/null || true
+          cp src/charts_manifest.json artifacts/ 2>/dev/null || true
           ls -lh artifacts/
 
       - name: 上传产物到 R2

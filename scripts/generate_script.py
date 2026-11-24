@@ -19,6 +19,19 @@ CHART_KEYS = {"timeline", "kline", "global", "gold", "sectors", "breadth"}
 SUMMARY_LIST_KEYS = ("breadth", "global_market", "precious_metal")
 
 
+# 只有标题、没有内容的 lesson 镜头会在成片里显示成空卡片，必须拦截
+LESSON_HEADINGS = {"核心策略", "风险提示", "规避方向", "最后忠告", "操作建议", "后市展望",
+                   "交易策略", "风险规避", "总结", "提示", "忠告", "策略"}
+
+
+def lesson_text_ok(text):
+    """lesson 的 text 必须是能朗读的完整句子，不能是 4 字标题。"""
+    t = str(text or "").strip()
+    if len(t) < 10:
+        return False
+    return t.rstrip("：:") not in LESSON_HEADINGS
+
+
 def chart_file(raw, visual):
     """把 LLM 给的 chart 键规范成 charts/xxx.png；非法或场景不符时返回 None。"""
     if visual not in ("data", "text"):
@@ -137,7 +150,7 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
 
 规则：
 1. 分镜 35-55 句，覆盖原文的：盘前预期、竞价、盘中走势、各板块表现、收盘数据、龙虎榜、后市建议。
-2. visual 分配：开头1句 hook + 1句 title；板块介绍用 topic；关键数字用 data（必须填 big）；吐槽金句用 punch（text 要犀利）；过渡句用 text；结尾风险提示用 lesson 2-4句；最后一句 outro 引导点赞收藏。
+2. visual 分配：开头1句 hook + 1句 title；板块介绍用 topic；关键数字用 data（必须填 big）；吐槽金句用 punch（text 要犀利）；过渡句用 text；结尾风险提示用 lesson 2-4句（每句都必须是完整口播句，不能只写标题）；最后一句 outro 引导点赞收藏。
 3. 数据全部来自用户原文，禁止编造数字。
 4. tone 遵循A股习惯：下跌/利空=negative，上涨/利好=positive，警示/反讽=warn，中性=neutral。
 5. 每句 text 独立成句、口语化，适合配音朗读；不要出现 Markdown、括号注释、英文。
@@ -156,7 +169,11 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
    - breadth：涨跌家数/涨停/跌停/连板等「家数」，value 用整数；
    - global_market / precious_metal：涨跌幅百分比，value 用数字，跌为负数；
    - breadth_note：炸板率、连板断层等一句话补充；
-   - 原文没有的字段留空数组 [] 或空字符串 ""。"""
+   - 原文没有的字段留空数组 [] 或空字符串 ""。
+10. lesson 分镜必须有实质内容，禁止只给标题：
+   - text 必须是 12 字以上的完整口播句，讲清"做什么 / 不做什么 / 为什么"，例如"明天别急着追，机器人前排回踩再接"；
+   - 小标题放 big（4-6字，如"核心策略""风险提示"），标题不参与朗读；
+   - 严禁输出 {"text":"核心策略"}、{"text":"风险提示"}、{"text":"规避方向"}、{"text":"最后忠告"} 这类只有标题、没有内容的空镜头。"""
 
 
 def generate_with_llm(cfg, article):
@@ -173,7 +190,13 @@ def generate_with_llm(cfg, article):
             last_err = e
             log(f"LLM 文稿解析失败（第 {attempt}/2 次）：{type(e).__name__} {e}")
             if attempt == 1:
-                user += "\n\n重要：只输出一个合法 JSON 对象，不要 Markdown 代码围栏，不要任何解释文字。"
+                if "LESSON_TOO_SHORT" in str(e):
+                    user += ("\n\n上一版把 lesson 分镜写成了空标题，不合格。"
+                             "请重写：每句 lesson 的 text 必须是 12 字以上完整口播句，"
+                             "小标题放到 big 字段，不能只写“核心策略”“风险提示”这类词。"
+                             "只输出一个合法 JSON 对象，不要 Markdown 代码围栏。")
+                else:
+                    user += "\n\n重要：只输出一个合法 JSON 对象，不要 Markdown 代码围栏，不要任何解释文字。"
     raise last_err
 
 
@@ -192,6 +215,11 @@ def normalize(data, cfg, article=""):
                 "visual": visual, "tone": tone}
         if s.get("big"):
             item["big"] = str(s["big"]).strip()
+        # lesson 的 text 若重复了小标题（"最后忠告：……"），去掉前缀，避免卡片上重复两遍
+        if visual == "lesson" and item.get("big") and item["text"].startswith(item["big"]):
+            stripped = item["text"][len(item["big"]):].lstrip("：:，,、 ")
+            if stripped:
+                item["text"] = stripped
         if s.get("label"):
             item["label"] = str(s["label"]).strip()
         chart = chart_file(s.get("chart"), visual)
@@ -211,6 +239,10 @@ def normalize(data, cfg, article=""):
         out[0].pop("chart", None)
     out[-1]["visual"] = "outro"
     out[-1].pop("chart", None)
+    bad_lessons = [it["text"] for it in out
+                   if it["visual"] == "lesson" and not lesson_text_ok(it["text"])]
+    if bad_lessons:
+        raise ValueError("LESSON_TOO_SHORT：" + " / ".join(bad_lessons))
     summary = merge_summary(normalize_summary(data.get("summary")), extract_summary(article))
     return {
         "article_title": data.get("article_title") or cfg.get("article_title", "盘面吐槽"),
