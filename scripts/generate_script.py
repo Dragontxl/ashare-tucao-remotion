@@ -49,6 +49,122 @@ def strip_lesson_lead(item):
         item["text"] = rest
 
 
+# ── 数字结论一致性校验 ────────────────────────────────────────────
+# 大模型经常把「涨停 57 家、跌停 44 家」写成「跌停比涨停还多」，
+# 数字对但结论反了。这里按真实家数做确定性纠正，避免成片出现事实错误。
+_COUNT_WORDS = ("涨停", "跌停", "上涨家数", "下跌家数", "上涨", "下跌")
+_CNT_RE = re.compile(
+    r"(涨停|跌停|上涨家数|下跌家数|上涨|下跌)\s*(\d{1,5})\s*(?:多)?\s*家")
+# A 比 B 还多 / 少 / 高 / 低
+_CMP_BEFORE = re.compile(
+    r"(涨停|跌停|上涨家数|下跌家数|上涨|下跌)(?:家数|家|数量)?\s*比\s*"
+    r"(涨停|跌停|上涨家数|下跌家数|上涨|下跌)(?:家数|家|数量)?\s*"
+    r"(?:还|都|也|更)?\s*(多|少|高|低)")
+# A 多于 / 少于 / 高于 / 低于 / 超过 / 大于 B
+_CMP_REL = re.compile(
+    r"(涨停|跌停|上涨家数|下跌家数|上涨|下跌)(?:家数|家|数量)?\s*"
+    r"(多于|少于|高于|低于|超过|大于|小于)\s*"
+    r"(涨停|跌停|上涨家数|下跌家数|上涨|下跌)(?:家数|家|数量)?")
+
+_FLIP_WORD = {"多": "少", "少": "多", "高": "低", "低": "高"}
+_FLIP_REL = {"多于": "少于", "少于": "多于", "高于": "低于", "低于": "高于",
+             "超过": "少于", "大于": "小于", "小于": "大于"}
+_CLAIM_MORE_REL = {"多于", "高于", "超过", "大于"}
+
+
+def _canon_count_word(word):
+    """把「上涨/下跌」统一成 summary 里的「上涨家数/下跌家数」。"""
+    return {"上涨": "上涨家数", "下跌": "下跌家数"}.get(word, word)
+
+
+def _summary_counts(summary):
+    counts = {}
+    for it in (summary or {}).get("breadth") or []:
+        label, value = it.get("label"), it.get("value")
+        if label in _COUNT_WORDS and isinstance(value, (int, float)):
+            counts[_canon_count_word(label)] = int(value)
+    return counts
+
+
+def _text_counts(text):
+    counts = {}
+    for m in _CNT_RE.finditer(text):
+        counts[_canon_count_word(m.group(1))] = int(m.group(2))
+    return counts
+
+
+def _clean_punct(text):
+    t = re.sub(r"[，,、；;：:]{2,}", "，", text)
+    t = re.sub(r"^[，,、；;：:\s]+", "", t)
+    t = re.sub(r"[，,、；;：:]+\s*([。！？!?])", r"\1", t)
+    t = re.sub(r"[，,、；;：:]+$", "", t)
+    t = t.strip()
+    if t and not t.endswith(("。", "！", "？", "!", "?")):
+        t += "。"
+    return t
+
+
+def _flip_match(m, regex):
+    """把矛盾比较句的方向词反过来（多↔少、多于↔少于）。"""
+    g = m.group(0)
+    base = m.start(0)
+    if regex is _CMP_BEFORE:
+        gi = 3
+        flipped = _FLIP_WORD[m.group(gi)]
+    else:
+        gi = 2
+        flipped = _FLIP_REL[m.group(gi)]
+    s, e = m.start(gi) - base, m.end(gi) - base
+    return g[:s] + flipped + g[e:]
+
+
+def _fix_count_text(text, summary_counts):
+    """纠正「跌停比涨停还多」这类与真实家数矛盾的比较句。"""
+    local = dict(summary_counts or {})
+    local.update(_text_counts(text))
+    stated = set(_text_counts(text))
+    changed = False
+
+    def make_repl(regex):
+        def repl(m):
+            nonlocal changed
+            if regex is _CMP_BEFORE:
+                a = _canon_count_word(m.group(1))
+                b = _canon_count_word(m.group(2))
+                claim_more = m.group(3) in ("多", "高")
+            else:
+                a = _canon_count_word(m.group(1))
+                b = _canon_count_word(m.group(3))
+                claim_more = m.group(2) in _CLAIM_MORE_REL
+            va, vb = local.get(a), local.get(b)
+            if va is None or vb is None or va == vb:
+                return m.group(0)          # 没有真实数字可比，保持原样
+            if (va > vb) == claim_more:
+                return m.group(0)          # 结论正确
+            changed = True
+            if a in stated or b in stated:
+                return ""                  # 句中已有数字，直接删掉错误结论
+            return _flip_match(m, regex)   # 否则把方向词反过来
+        return repl
+
+    out = _CMP_BEFORE.sub(make_repl(_CMP_BEFORE), text)
+    out = _CMP_REL.sub(make_repl(_CMP_REL), out)
+    return (_clean_punct(out) if changed else text), changed
+
+
+def fix_count_claims(sentences, summary):
+    """逐句纠正涨跌家数/涨跌停家数的矛盾结论，返回被修改的句子列表。"""
+    base = _summary_counts(summary)
+    changes = []
+    for it in sentences:
+        old = it.get("text", "")
+        new, changed = _fix_count_text(old, base)
+        if changed and new:
+            it["text"] = new
+            changes.append((old, new))
+    return changes
+
+
 def chart_file(raw, visual):
     """把 LLM 给的 chart 键规范成 charts/xxx.png；非法或场景不符时返回 None。"""
     if visual not in ("data", "text"):
@@ -190,7 +306,12 @@ SYSTEM_PROMPT = """你是一名犀利毒舌、幽默风趣的A股财经吐槽博
 10. lesson 分镜必须有实质内容，禁止只给标题：
    - text 必须是 12 字以上的完整口播句，讲清"做什么 / 不做什么 / 为什么"，例如"明天别急着追，机器人前排回踩再接"；
    - 小标题放 big（4-6字，如"核心策略""风险提示"），标题不参与朗读；
-   - 严禁输出 {"text":"核心策略"}、{"text":"风险提示"}、{"text":"规避方向"}、{"text":"最后忠告"} 这类只有标题、没有内容的空镜头。"""
+   - 严禁输出 {"text":"核心策略"}、{"text":"风险提示"}、{"text":"规避方向"}、{"text":"最后忠告"} 这类只有标题、没有内容的空镜头。
+11. 涉及涨跌家数/涨跌停家数的比较，必须先核对数字再下结论，数字与结论必须一致：
+   - 跌停家数 < 涨停家数时，禁止说"跌停比涨停多"；
+   - 涨停家数 < 跌停家数时，禁止说"涨停比跌停多"；
+   - 上涨家数 < 下跌家数时，禁止说"上涨家数比下跌家数多"；
+   - 拿不准就不要做比较，只报数字。"""
 
 
 def generate_with_llm(cfg, article):
@@ -257,6 +378,8 @@ def normalize(data, cfg, article=""):
     if bad_lessons:
         raise ValueError("LESSON_TOO_SHORT：" + " / ".join(bad_lessons))
     summary = merge_summary(normalize_summary(data.get("summary")), extract_summary(article))
+    for old, new in fix_count_claims(out, summary):
+        log(f"修正数字结论矛盾：{old} -> {new}")
     return {
         "article_title": data.get("article_title") or cfg.get("article_title", "盘面吐槽"),
         "hook_title": data.get("hook_title") or cfg.get("hook_title", "今天这盘面"),
